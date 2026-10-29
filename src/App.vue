@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { VueScrollPicker } from 'vue-scroll-picker'
 import 'vue-scroll-picker/style.css'
 import equipmentData from './data/equipment.json'
+import { storage, migrateFromLocalStorage } from './db/index.js'
 
 const currentDate = ref(new Date().toISOString().split('T')[0])
 const workouts = ref([])
@@ -30,26 +31,20 @@ function getMachineSettings(equipmentId) {
       targetSets: 2,
       stepSize: 5,
       startingKg: equipmentData.find(eq => eq.id === equipmentId)?.defaultKg || 0,
-      countDirection: 'up' // 'up' (normal) or 'down' (assisted exercises like pull-ups)
+      countDirection: 'up'
     }
   }
   return machineSettings.value[equipmentId]
 }
 
-function saveMachineSettings(equipmentId, settings) {
+async function saveMachineSettings(equipmentId, settings) {
   machineSettings.value[equipmentId] = settings
-  localStorage.setItem('happyfit-machine-settings', JSON.stringify(machineSettings.value))
+  await storage.putMachineSetting(equipmentId, settings)
 }
 
-function loadMachineSettings() {
-  const stored = localStorage.getItem('happyfit-machine-settings')
-  if (stored) {
-    try {
-      machineSettings.value = JSON.parse(stored)
-    } catch (e) {
-      machineSettings.value = {}
-    }
-  }
+async function loadMachineSettings() {
+  const settings = await storage.getMachineSettings()
+  machineSettings.value = settings
 }
 
 function openMachineSettings(workout) {
@@ -285,39 +280,33 @@ function initWorkouts(isNewDay = false) {
   }
 }
 
-function loadSessions() {
-  const stored = localStorage.getItem('happyfit-sessions')
-  if (stored) {
-    sessions.value = JSON.parse(stored)
+async function loadSessions() {
+  const loadedSessions = await storage.getSessions()
+  sessions.value = loadedSessions
+}
+
+async function saveSessions() {
+  const allSessions = sessions.value
+  for (const session of allSessions) {
+    await storage.putSession(session)
   }
 }
 
-function saveSessions() {
-  localStorage.setItem('happyfit-sessions', JSON.stringify(sessions.value))
-}
-
-function loadEnabledEquipment() {
-  const stored = localStorage.getItem('happyfit-enabled-equipment')
-  if (stored) {
-    try {
-      const ids = JSON.parse(stored)
-      enabledEquipment.value = new Set(ids)
-    } catch (e) {
-      // Default: enable all
-      enabledEquipment.value = new Set(equipmentData.map(eq => eq.id))
-    }
+async function loadEnabledEquipment() {
+  const ids = await storage.getEnabledEquipment()
+  if (ids.length > 0) {
+    enabledEquipment.value = new Set(ids)
   } else {
-    // Default: enable all
     enabledEquipment.value = new Set(equipmentData.map(eq => eq.id))
   }
 }
 
-function saveEnabledEquipment() {
+async function saveEnabledEquipment() {
   const ids = Array.from(enabledEquipment.value)
-  localStorage.setItem('happyfit-enabled-equipment', JSON.stringify(ids))
+  await storage.setEnabledEquipment(ids)
 }
 
-function saveToday() {
+async function saveToday() {
   const existingIndex = sessions.value.findIndex(s => s.date === currentDate.value)
   const session = {
     date: currentDate.value,
@@ -330,7 +319,7 @@ function saveToday() {
     sessions.value.push(session)
   }
   
-  saveSessions()
+  await storage.putSession(session)
 }
 
 function toggleComplete(workout) {
@@ -484,20 +473,20 @@ function exportData() {
   URL.revokeObjectURL(url)
 }
 
-function importData() {
+async function importData() {
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = 'application/json'
-  input.onchange = (e) => {
+  input.onchange = async (e) => {
     const file = e.target.files[0]
     const reader = new FileReader()
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       try {
         const imported = JSON.parse(event.target.result)
         if (Array.isArray(imported)) {
           sessions.value = imported
-          saveSessions()
-          initWorkouts()
+          await saveSessions()
+          await initWorkouts()
           alert('Import erfolgreich!')
         }
       } catch (err) {
@@ -509,11 +498,11 @@ function importData() {
   input.click()
 }
 
-function resetData() {
+async function resetData() {
   if (confirm('Alle Daten löschen? Dies kann nicht rückgängig gemacht werden.')) {
-    localStorage.removeItem('happyfit-sessions')
+    await storage.deleteSessions()
     sessions.value = []
-    initWorkouts()
+    await initWorkouts()
   }
 }
 
@@ -618,10 +607,11 @@ function handlePickerChange(newValue) {
   pickerValue.value = newValue
 }
 
-onMounted(() => {
-  loadEnabledEquipment()
-  loadMachineSettings()
-  loadSessions()
+onMounted(async () => {
+  await migrateFromLocalStorage()
+  await loadEnabledEquipment()
+  await loadMachineSettings()
+  await loadSessions()
   initWorkouts()
 })
 </script>
