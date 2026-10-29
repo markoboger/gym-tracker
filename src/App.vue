@@ -7,37 +7,158 @@ const workouts = ref([])
 const sessions = ref([])
 const showHistory = ref(false)
 const editingSession = ref(null)
+const showChart = ref(false)
+const selectedExerciseId = ref(null)
+const selectedSeason = ref(null)
+const historyView = ref('sessions') // 'sessions' or 'chart'
 
 const todaySession = computed(() => {
   return sessions.value.find(s => s.date === currentDate.value)
 })
 
-const sortedSessions = computed(() => {
-  return [...sessions.value].sort((a, b) => new Date(b.date) - new Date(a.date))
-})
-
-function seedWorkoutsFromEquipment() {
-  return equipmentData.map(eq => ({
-    equipmentId: eq.id,
-    name: eq.name,
-    nr: eq.nr,
-    kg: eq.defaultKg,
-    sets: eq.sets,
-    reps: eq.reps,
-    meters: eq.isCardio ? 0 : null,
-    minutes: eq.isCardio || eq.isSauna ? 0 : null,
-    isCardio: eq.isCardio,
-    isSauna: eq.isSauna,
-    completed: false
-  }))
+function getSeasonFromDate(dateStr) {
+  const date = new Date(dateStr)
+  const month = date.getMonth() + 1
+  const year = date.getFullYear()
+  
+  // Season runs Sep → Aug
+  // Sep-Dec belongs to current year season (e.g., Sep 2025 = 2025/26)
+  // Jan-Aug belongs to previous year season (e.g., Jan 2026 = 2025/26)
+  if (month >= 9) {
+    return `${year}/${(year + 1) % 100}`
+  } else {
+    return `${year - 1}/${year % 100}`
+  }
 }
 
+const availableSeasons = computed(() => {
+  const seasonSet = new Set()
+  sessions.value.forEach(session => {
+    seasonSet.add(getSeasonFromDate(session.date))
+  })
+  return Array.from(seasonSet).sort().reverse()
+})
+
+const currentSeason = computed(() => {
+  return getSeasonFromDate(new Date().toISOString().split('T')[0])
+})
+
+const filteredSessions = computed(() => {
+  let filtered = sessions.value
+  
+  if (selectedSeason.value) {
+    filtered = filtered.filter(s => getSeasonFromDate(s.date) === selectedSeason.value)
+  }
+  
+  return [...filtered].sort((a, b) => new Date(b.date) - new Date(a.date))
+})
+
+const sortedSessions = computed(() => filteredSessions.value)
+
+const availableExercises = computed(() => {
+  const exerciseMap = new Map()
+  
+  filteredSessions.value.forEach(session => {
+    session.workouts.forEach(workout => {
+      if (!workout.isSauna && workout.kg > 0) {
+        if (!exerciseMap.has(workout.equipmentId)) {
+          exerciseMap.set(workout.equipmentId, {
+            id: workout.equipmentId,
+            name: workout.name
+          })
+        }
+      }
+    })
+  })
+  
+  return Array.from(exerciseMap.values()).sort((a, b) => a.name.localeCompare(b.name))
+})
+
+const chartData = computed(() => {
+  if (!selectedExerciseId.value) return []
+  
+  const data = []
+  const chronologicalSessions = [...filteredSessions.value].sort((a, b) => 
+    new Date(a.date) - new Date(b.date)
+  )
+  
+  chronologicalSessions.forEach(session => {
+    const workout = session.workouts.find(w => w.equipmentId === selectedExerciseId.value)
+    if (workout && !workout.isSauna && workout.kg > 0) {
+      data.push({
+        date: session.date,
+        kg: workout.kg,
+        sets: workout.sets,
+        reps: workout.reps
+      })
+    }
+  })
+  
+  return data
+})
+
+const chartStats = computed(() => {
+  if (chartData.value.length === 0) return null
+  
+  const weights = chartData.value.map(d => d.kg)
+  const min = Math.min(...weights)
+  const max = Math.max(...weights)
+  const latest = weights[weights.length - 1]
+  const first = weights[0]
+  const change = latest - first
+  
+  return { min, max, latest, first, change, count: weights.length }
+})
+
+const selectedExerciseName = computed(() => {
+  const exercise = availableExercises.value.find(e => e.id === selectedExerciseId.value)
+  return exercise ? exercise.name : ''
+})
+
 function initWorkouts() {
-  const existing = todaySession.value
-  if (existing && Array.isArray(existing.workouts) && existing.workouts.length > 0) {
-    workouts.value = existing.workouts
+  const existingSession = sessions.value.find(s => s.date === currentDate.value)
+  
+  if (!existingSession) {
+    // Create fresh workout list from equipment defaults
+    workouts.value = equipmentData.map(eq => ({
+      equipmentId: eq.id,
+      name: eq.name,
+      nr: eq.nr,
+      kg: eq.defaultKg,
+      sets: eq.sets,
+      reps: eq.reps,
+      meters: eq.isCardio ? 0 : null,
+      minutes: eq.isCardio || eq.isSauna ? 0 : null,
+      isCardio: eq.isCardio,
+      isSauna: eq.isSauna,
+      completed: false
+    }))
   } else {
-    workouts.value = seedWorkoutsFromEquipment()
+    // Load existing session - expand to show all equipment
+    const sessionWorkoutMap = new Map(
+      existingSession.workouts.map(w => [w.equipmentId, w])
+    )
+    
+    workouts.value = equipmentData.map(eq => {
+      const existing = sessionWorkoutMap.get(eq.id)
+      if (existing) {
+        return { ...existing, completed: true }
+      } else {
+        return {
+          equipmentId: eq.id,
+          name: eq.name,
+          nr: eq.nr,
+          kg: eq.defaultKg,
+          sets: eq.sets,
+          reps: eq.reps,
+          meters: eq.isCardio ? 0 : null,
+          minutes: eq.isCardio || eq.isSauna ? 0 : null,
+          isCardio: eq.isCardio,
+          isSauna: eq.isSauna,
+          completed: false
+        }
+      }
+    })
   }
 }
 
@@ -98,19 +219,100 @@ function decrement(workout, field) {
 
 function viewHistory() {
   showHistory.value = true
+  if (!selectedSeason.value) {
+    selectedSeason.value = currentSeason.value
+  }
+  // Default to chart view if we have data
+  if (sessions.value.length > 0) {
+    historyView.value = 'chart'
+    if (!selectedExerciseId.value && availableExercises.value.length > 0) {
+      selectedExerciseId.value = availableExercises.value[0].id
+    }
+  } else {
+    historyView.value = 'sessions'
+  }
 }
 
 function backToToday() {
   showHistory.value = false
   editingSession.value = null
+  historyView.value = 'sessions'
   currentDate.value = new Date().toISOString().split('T')[0]
   initWorkouts()
 }
 
+function showChartView() {
+  historyView.value = 'chart'
+  if (!selectedExerciseId.value && availableExercises.value.length > 0) {
+    selectedExerciseId.value = availableExercises.value[0].id
+  }
+}
+
+function showSessionsView() {
+  historyView.value = 'sessions'
+}
+
+function selectExercise(exerciseId) {
+  selectedExerciseId.value = exerciseId
+}
+
+function selectSeason(season) {
+  selectedSeason.value = season
+}
+
 function viewSession(session) {
+  showHistory.value = false
   editingSession.value = session
   currentDate.value = session.date
-  workouts.value = session.workouts
+  initWorkouts()
+}
+
+function backToHistory() {
+  showHistory.value = true
+  editingSession.value = null
+  currentDate.value = new Date().toISOString().split('T')[0]
+}
+
+function getX(index) {
+  const chartWidth = 300
+  const chartLeft = 40
+  const count = chartData.value.length
+  
+  if (count === 1) return chartLeft + chartWidth / 2
+  
+  return chartLeft + (index / (count - 1)) * chartWidth
+}
+
+function getY(kg) {
+  const chartHeight = 160
+  const chartTop = 20
+  const max = chartStats.value.max
+  const min = Math.min(chartStats.value.min, 0)
+  const range = max - min
+  
+  if (range === 0) return chartTop + chartHeight / 2
+  
+  const normalizedValue = (kg - min) / range
+  return chartTop + chartHeight - (normalizedValue * chartHeight)
+}
+
+function getChartPath(includeArea) {
+  if (chartData.value.length === 0) return ''
+  
+  let path = `M ${getX(0)} ${getY(chartData.value[0].kg)}`
+  
+  for (let i = 1; i < chartData.value.length; i++) {
+    path += ` L ${getX(i)} ${getY(chartData.value[i].kg)}`
+  }
+  
+  if (includeArea) {
+    const lastIndex = chartData.value.length - 1
+    path += ` L ${getX(lastIndex)} 180`
+    path += ` L ${getX(0)} 180`
+    path += ' Z'
+  }
+  
+  return path
 }
 
 function exportData() {
@@ -168,20 +370,21 @@ onMounted(() => {
     <header class="header">
       <h1>💪 HappyFit</h1>
       <div class="header-actions">
-        <button v-if="!showHistory" @click="viewHistory" class="btn-secondary">Verlauf</button>
-        <button v-else @click="backToToday" class="btn-secondary">Heute</button>
+        <button v-if="showHistory" @click="backToToday" class="btn-secondary">← Heute</button>
+        <button v-else-if="editingSession" @click="backToHistory" class="btn-secondary">← Verlauf</button>
+        <button v-else @click="viewHistory" class="btn-secondary">Verlauf</button>
       </div>
     </header>
 
     <main class="main">
       <div v-if="!showHistory" class="today-view">
         <div class="date-header">
+          <label class="date-label">
+            {{ editingSession ? 'Training bearbeiten' : 'Training' }}
+          </label>
           <input type="date" v-model="currentDate" @change="initWorkouts" class="date-input" />
         </div>
 
-        <div v-if="workouts.length === 0" class="empty-state">
-          Keine Übungen geladen — tippe auf das Datum oder lade neu.
-        </div>
         <div class="workouts-list">
           <div 
             v-for="workout in workouts" 
@@ -288,28 +491,180 @@ onMounted(() => {
       <div v-else class="history-view">
         <h2>Verlauf</h2>
         
-        <div class="history-actions">
-          <button @click="exportData" class="btn-secondary">Export</button>
-          <button @click="importData" class="btn-secondary">Import</button>
-          <button @click="resetData" class="btn-danger">Reset</button>
-        </div>
-
-        <div class="sessions-list">
-          <div 
-            v-for="session in sortedSessions" 
-            :key="session.date"
-            @click="viewSession(session)"
-            class="session-card"
-          >
-            <div class="session-date">{{ session.date }}</div>
-            <div class="session-summary">
-              {{ session.workouts.length }} Übungen
-            </div>
+        <div class="season-selector">
+          <label>Saison:</label>
+          <div class="season-chips">
+            <button
+              v-for="season in availableSeasons"
+              :key="season"
+              @click="selectSeason(season)"
+              class="season-chip"
+              :class="{ active: selectedSeason === season }"
+            >
+              {{ season }}
+            </button>
+            <button
+              v-if="availableSeasons.length === 0"
+              class="season-chip active"
+            >
+              {{ currentSeason }}
+            </button>
           </div>
         </div>
 
-        <div v-if="sortedSessions.length === 0" class="empty-state">
-          Noch keine Trainings protokolliert.
+        <div class="view-tabs">
+          <button 
+            @click="showSessionsView" 
+            class="tab-btn"
+            :class="{ active: historyView === 'sessions' }"
+          >
+            Sessions
+          </button>
+          <button 
+            @click="showChartView" 
+            class="tab-btn"
+            :class="{ active: historyView === 'chart' }"
+            :disabled="availableExercises.length === 0"
+          >
+            Gewicht Grafik
+          </button>
+        </div>
+
+        <div v-if="historyView === 'sessions'" class="sessions-content">
+          <div class="history-actions">
+            <button @click="exportData" class="btn-secondary">Export</button>
+            <button @click="importData" class="btn-secondary">Import</button>
+            <button @click="resetData" class="btn-danger">Reset</button>
+          </div>
+
+          <div class="sessions-list">
+            <div 
+              v-for="session in sortedSessions" 
+              :key="session.date"
+              @click="viewSession(session)"
+              class="session-card"
+            >
+              <div class="session-date">{{ session.date }}</div>
+              <div class="session-summary">
+                {{ session.workouts.length }} Übungen
+              </div>
+            </div>
+          </div>
+
+          <div v-if="sortedSessions.length === 0" class="empty-state">
+            Keine Trainings in dieser Saison.
+          </div>
+        </div>
+
+        <div v-else-if="historyView === 'chart'" class="chart-content">
+          <div class="exercise-selector">
+            <label>Übung:</label>
+            <select 
+              v-model="selectedExerciseId" 
+              @change="selectExercise(selectedExerciseId)"
+              class="exercise-select"
+            >
+              <option 
+                v-for="exercise in availableExercises" 
+                :key="exercise.id"
+                :value="exercise.id"
+              >
+                {{ exercise.name }}
+              </option>
+            </select>
+          </div>
+
+          <div v-if="chartData.length > 0" class="chart-container">
+            <div class="chart-stats">
+              <div class="stat">
+                <span class="stat-label">Min</span>
+                <span class="stat-value">{{ chartStats.min }} kg</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Max</span>
+                <span class="stat-value">{{ chartStats.max }} kg</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Aktuell</span>
+                <span class="stat-value">{{ chartStats.latest }} kg</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Änderung</span>
+                <span class="stat-value" :class="{ positive: chartStats.change > 0, negative: chartStats.change < 0 }">
+                  {{ chartStats.change > 0 ? '+' : '' }}{{ chartStats.change }} kg
+                </span>
+              </div>
+            </div>
+
+            <svg class="weight-chart" viewBox="0 0 360 200" preserveAspectRatio="xMidYMid meet">
+              <defs>
+                <linearGradient id="lineGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" style="stop-color:#007aff;stop-opacity:0.3" />
+                  <stop offset="100%" style="stop-color:#007aff;stop-opacity:0" />
+                </linearGradient>
+              </defs>
+
+              <!-- Grid lines -->
+              <line v-for="i in 5" :key="'grid-' + i" 
+                :x1="40" :y1="20 + (i - 1) * 40" 
+                :x2="340" :y2="20 + (i - 1) * 40" 
+                stroke="#38383a" stroke-width="0.5" />
+
+              <!-- Y-axis labels -->
+              <text v-for="(tick, i) in [chartStats.max, chartStats.max * 0.75, chartStats.max * 0.5, chartStats.max * 0.25, 0]"
+                :key="'y-label-' + i"
+                :x="35" 
+                :y="24 + i * 40"
+                text-anchor="end"
+                font-size="10"
+                fill="#8e8e93"
+              >
+                {{ Math.round(tick) }}
+              </text>
+
+              <!-- Chart line and area -->
+              <template v-if="chartData.length > 1">
+                <path
+                  :d="getChartPath(true)"
+                  fill="url(#lineGradient)"
+                />
+                <path
+                  :d="getChartPath(false)"
+                  fill="none"
+                  stroke="#007aff"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </template>
+
+              <!-- Data points -->
+              <circle
+                v-for="(point, i) in chartData"
+                :key="'point-' + i"
+                :cx="getX(i)"
+                :cy="getY(point.kg)"
+                r="4"
+                fill="#007aff"
+                stroke="#000"
+                stroke-width="2"
+              />
+            </svg>
+
+            <div class="chart-legend">
+              <div class="legend-dates">
+                <span class="date-start">{{ chartData[0].date }}</span>
+                <span class="date-end">{{ chartData[chartData.length - 1].date }}</span>
+              </div>
+              <div class="legend-info">
+                {{ chartData.length }} Trainings • {{ selectedExerciseName }}
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="empty-state">
+            Keine Gewichtsdaten für diese Übung in dieser Saison.
+          </div>
         </div>
       </div>
     </main>
@@ -380,6 +735,14 @@ body {
 
 .date-header {
   margin-bottom: 1rem;
+}
+
+.date-label {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+  font-weight: 500;
 }
 
 .date-input {
@@ -552,6 +915,83 @@ body {
   margin-bottom: 1rem;
 }
 
+.season-selector {
+  margin-bottom: 1rem;
+}
+
+.season-selector label {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+.season-chips {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.season-chip {
+  padding: 0.5rem 1rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.season-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.season-chip:active {
+  transform: scale(0.95);
+}
+
+.view-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  background: var(--bg-secondary);
+  padding: 0.25rem;
+  border-radius: 10px;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 0.625rem;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tab-btn.active {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.tab-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sessions-content {
+  display: flex;
+  flex-direction: column;
+}
+
 .history-actions {
   display: flex;
   gap: 0.5rem;
@@ -591,6 +1031,106 @@ body {
   text-align: center;
   color: var(--text-secondary);
   padding: 2rem;
+}
+
+.chart-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.exercise-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.exercise-selector label {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.exercise-select {
+  width: 100%;
+  padding: 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.chart-container {
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  padding: 1rem;
+}
+
+.chart-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.75rem;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.25rem;
+}
+
+.stat-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.stat-value.positive {
+  color: var(--success);
+}
+
+.stat-value.negative {
+  color: var(--danger);
+}
+
+.weight-chart {
+  width: 100%;
+  height: auto;
+  margin: 1rem 0;
+}
+
+.chart-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.legend-dates {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.legend-info {
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
 }
 
 @media (max-width: 400px) {
