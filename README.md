@@ -70,6 +70,8 @@ Der Dev-Server läuft auf Port **5874** und ist per `--host true` im lokalen Net
    - Funktioniert offline
    - Daten bleiben dauerhaft gespeichert (IndexedDB)
 
+**Wichtig nach Update:** Wenn du die App bereits installiert hattest und sie einen 404-Fehler zeigt, lösche das alte Icon vom Home Screen und füge die App erneut hinzu. Dies ist nur einmal nach dem PWA-Manifest-Fix nötig.
+
 ### Option: Lokales Netzwerk für Development
 
 1. Stelle sicher, dass dein iPhone und dein Computer im **gleichen WLAN** sind
