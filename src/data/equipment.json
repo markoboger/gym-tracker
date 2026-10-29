@@ -182,7 +182,7 @@
   {
     "id": 19,
     "nr": "Kabelzug",
-    "name": "Hor. Außenrotation",
+    "name": "Horizontale Außenrotation",
     "defaultKg": 10,
     "sets": 2,
     "reps": 12,

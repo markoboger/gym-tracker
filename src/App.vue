@@ -129,27 +129,68 @@ const selectedExerciseName = computed(() => {
   return exercise ? exercise.name : ''
 })
 
-function initWorkouts() {
+function getMostRecentWorkoutData(equipmentId) {
+  // Sort sessions chronologically, most recent first
+  const sortedSessions = [...sessions.value].sort((a, b) => 
+    new Date(b.date) - new Date(a.date)
+  )
+  
+  // Find the most recent session that has this equipment
+  for (const session of sortedSessions) {
+    const workout = session.workouts.find(w => w.equipmentId === equipmentId)
+    if (workout) {
+      return workout
+    }
+  }
+  
+  return null
+}
+
+function initWorkouts(isNewDay = false) {
   const existingSession = sessions.value.find(s => s.date === currentDate.value)
   
   // Only include enabled equipment
   const enabledEquipmentData = equipmentData.filter(eq => enabledEquipment.value.has(eq.id))
   
-  if (!existingSession) {
-    // Create fresh workout list from enabled equipment defaults
-    workouts.value = enabledEquipmentData.map(eq => ({
-      equipmentId: eq.id,
-      name: eq.name,
-      nr: eq.nr,
-      kg: eq.defaultKg,
-      sets: eq.sets,
-      reps: eq.reps,
-      meters: eq.isCardio ? 0 : null,
-      minutes: eq.isCardio || eq.isSauna ? 0 : null,
-      isCardio: eq.isCardio,
-      isSauna: eq.isSauna,
-      completed: false
-    }))
+  if (!existingSession || isNewDay) {
+    // Create fresh workout list from enabled equipment
+    workouts.value = enabledEquipmentData.map(eq => {
+      if (isNewDay) {
+        // For new training day: carry forward kg/reps from most recent, but sets = 0
+        const recentWorkout = getMostRecentWorkoutData(eq.id)
+        
+        if (recentWorkout) {
+          return {
+            equipmentId: eq.id,
+            name: eq.name,
+            nr: eq.nr,
+            kg: recentWorkout.kg,
+            sets: 0,
+            reps: recentWorkout.reps,
+            meters: eq.isCardio ? (recentWorkout.meters || 0) : null,
+            minutes: (eq.isCardio || eq.isSauna) ? (recentWorkout.minutes || 0) : null,
+            isCardio: eq.isCardio,
+            isSauna: eq.isSauna,
+            completed: false
+          }
+        }
+      }
+      
+      // Default values for new session or no previous data
+      return {
+        equipmentId: eq.id,
+        name: eq.name,
+        nr: eq.nr,
+        kg: eq.defaultKg,
+        sets: isNewDay ? 0 : eq.sets,
+        reps: eq.reps,
+        meters: eq.isCardio ? 0 : null,
+        minutes: (eq.isCardio || eq.isSauna) ? 0 : null,
+        isCardio: eq.isCardio,
+        isSauna: eq.isSauna,
+        completed: false
+      }
+    })
   } else {
     // Load existing session - expand to show all enabled equipment
     const sessionWorkoutMap = new Map(
@@ -169,7 +210,7 @@ function initWorkouts() {
           sets: eq.sets,
           reps: eq.reps,
           meters: eq.isCardio ? 0 : null,
-          minutes: eq.isCardio || eq.isSauna ? 0 : null,
+          minutes: (eq.isCardio || eq.isSauna) ? 0 : null,
           isCardio: eq.isCardio,
           isSauna: eq.isSauna,
           completed: false
@@ -425,6 +466,25 @@ function disableAll() {
   saveEnabledEquipment()
 }
 
+function createNewDay() {
+  // Set current date to today
+  currentDate.value = new Date().toISOString().split('T')[0]
+  
+  // Check if today already has a session
+  const todayHasSession = sessions.value.some(s => s.date === currentDate.value)
+  
+  if (todayHasSession) {
+    if (!confirm('Heute existiert bereits ein Training. Neu starten?')) {
+      return
+    }
+  }
+  
+  // Initialize with new day logic (carry forward kg/reps, sets = 0)
+  showHistory.value = false
+  editingSession.value = null
+  initWorkouts(true)
+}
+
 onMounted(() => {
   loadEnabledEquipment()
   loadSessions()
@@ -451,9 +511,14 @@ onMounted(() => {
     <main class="main">
       <div v-if="!showHistory" class="today-view">
         <div class="date-header">
-          <label class="date-label">
-            {{ editingSession ? 'Training bearbeiten' : 'Training' }}
-          </label>
+          <div class="date-header-top">
+            <label class="date-label">
+              {{ editingSession ? 'Training bearbeiten' : 'Training' }}
+            </label>
+            <button v-if="!editingSession" @click="createNewDay" class="btn-new-day">
+              + Neuer Tag
+            </button>
+          </div>
           <input type="date" v-model="currentDate" @change="initWorkouts" class="date-input" />
         </div>
 
@@ -877,12 +942,35 @@ body {
   margin-bottom: 1rem;
 }
 
+.date-header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
 .date-label {
-  display: block;
   font-size: 0.875rem;
   color: var(--text-secondary);
-  margin-bottom: 0.5rem;
   font-weight: 500;
+}
+
+.btn-new-day {
+  padding: 0.5rem 1rem;
+  background: var(--success);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-new-day:active {
+  transform: scale(0.95);
+  opacity: 0.8;
 }
 
 .date-input {
