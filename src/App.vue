@@ -19,6 +19,58 @@ const showPicker = ref(false)
 const pickerWorkout = ref(null)
 const pickerField = ref('')
 const pickerValue = ref(0)
+const showMachineSettings = ref(false)
+const editingMachine = ref(null)
+const machineSettings = ref({})
+
+// Get machine settings with defaults
+function getMachineSettings(equipmentId) {
+  if (!machineSettings.value[equipmentId]) {
+    return {
+      targetSets: 2,
+      stepSize: 5,
+      startingKg: equipmentData.find(eq => eq.id === equipmentId)?.defaultKg || 0,
+      countDirection: 'up' // 'up' (normal) or 'down' (assisted exercises like pull-ups)
+    }
+  }
+  return machineSettings.value[equipmentId]
+}
+
+function saveMachineSettings(equipmentId, settings) {
+  machineSettings.value[equipmentId] = settings
+  localStorage.setItem('happyfit-machine-settings', JSON.stringify(machineSettings.value))
+}
+
+function loadMachineSettings() {
+  const stored = localStorage.getItem('happyfit-machine-settings')
+  if (stored) {
+    try {
+      machineSettings.value = JSON.parse(stored)
+    } catch (e) {
+      machineSettings.value = {}
+    }
+  }
+}
+
+function openMachineSettings(workout) {
+  editingMachine.value = {
+    ...workout,
+    settings: { ...getMachineSettings(workout.equipmentId) }
+  }
+  showMachineSettings.value = true
+}
+
+function closeMachineSettings() {
+  showMachineSettings.value = false
+  editingMachine.value = null
+}
+
+function applyMachineSettings() {
+  if (editingMachine.value) {
+    saveMachineSettings(editingMachine.value.equipmentId, editingMachine.value.settings)
+  }
+  closeMachineSettings()
+}
 
 const todaySession = computed(() => {
   return sessions.value.find(s => s.date === currentDate.value)
@@ -303,7 +355,9 @@ function enterEditMode(workout) {
 
 function increment(workout, field) {
   if (field === 'kg') {
-    workout.kg = Math.round((workout.kg + 2.5) * 10) / 10
+    const settings = getMachineSettings(workout.equipmentId)
+    const step = settings.stepSize
+    workout.kg = Math.round((workout.kg + step) * 10) / 10
   } else {
     workout[field]++
   }
@@ -312,7 +366,9 @@ function increment(workout, field) {
 
 function decrement(workout, field) {
   if (field === 'kg') {
-    workout.kg = Math.max(0, Math.round((workout.kg - 2.5) * 10) / 10)
+    const settings = getMachineSettings(workout.equipmentId)
+    const step = settings.stepSize
+    workout.kg = Math.max(0, Math.round((workout.kg - step) * 10) / 10)
   } else {
     workout[field] = Math.max(0, workout[field] - 1)
   }
@@ -530,17 +586,30 @@ function applyPickerValue() {
 }
 
 function getPickerRange(field) {
-  if (field === 'kg') {
-    // 0 to 200 kg in 2.5 kg increments
+  if (field === 'kg' && pickerWorkout.value) {
+    // Use machine-specific step size
+    const settings = getMachineSettings(pickerWorkout.value.equipmentId)
+    const step = settings.stepSize
     const values = []
-    for (let i = 0; i <= 200; i += 2.5) {
-      values.push(Math.round(i * 10) / 10)
+    for (let i = 0; i <= 200; i += step) {
+      const val = Math.round(i * 10) / 10
+      values.push({ name: `${val} kg`, value: val })
+    }
+    // Reverse order for count-down machines (lower is better)
+    if (settings.countDirection === 'down') {
+      return values.reverse()
     }
     return values
   } else if (field === 'sets') {
-    return Array.from({ length: 11 }, (_, i) => i) // 0-10
+    return Array.from({ length: 11 }, (_, i) => ({ 
+      name: `${i}`, 
+      value: i 
+    }))
   } else if (field === 'reps') {
-    return Array.from({ length: 51 }, (_, i) => i) // 0-50
+    return Array.from({ length: 51 }, (_, i) => ({ 
+      name: `${i}`, 
+      value: i 
+    }))
   }
   return []
 }
@@ -551,6 +620,7 @@ function handlePickerChange(newValue) {
 
 onMounted(() => {
   loadEnabledEquipment()
+  loadMachineSettings()
   loadSessions()
   initWorkouts()
 })
@@ -592,6 +662,9 @@ onMounted(() => {
             :key="workout.equipmentId"
             class="workout-card"
             :class="{ completed: workout.completed, collapsed: workout.collapsed }"
+            :style="workout.collapsed && workout.completed ? {
+              background: `linear-gradient(to right, rgba(52, 199, 89, 0.15) ${(workout.sets / getMachineSettings(workout.equipmentId).targetSets) * 100}%, var(--bg-secondary) ${(workout.sets / getMachineSettings(workout.equipmentId).targetSets) * 100}%)`
+            } : {}"
           >
             <div 
               class="workout-header"
@@ -606,9 +679,18 @@ onMounted(() => {
                 <span v-if="workout.collapsed" class="workout-summary">
                   {{ workout.kg > 0 ? workout.kg + 'kg' : '' }}
                   {{ workout.sets > 0 ? ' · ' + workout.sets + '×' + workout.reps : '' }}
+                  {{ workout.completed ? ` · ${workout.sets}/${getMachineSettings(workout.equipmentId).targetSets}` : '' }}
                 </span>
               </div>
               <div class="header-actions">
+                <button 
+                  @click.stop="openMachineSettings(workout)"
+                  class="btn-settings"
+                  v-if="!workout.collapsed"
+                  title="Einstellungen"
+                >
+                  ⚙️
+                </button>
                 <button 
                   @click.stop="quickLog(workout)"
                   class="btn-quick"
@@ -931,6 +1013,93 @@ onMounted(() => {
             :options="getPickerRange(pickerField)"
             @update:modelValue="handlePickerChange"
           />
+        </div>
+      </div>
+    </div>
+
+    <!-- Machine Settings Modal -->
+    <div v-if="showMachineSettings && editingMachine" class="picker-overlay" @click="closeMachineSettings">
+      <div class="settings-modal" @click.stop>
+        <div class="settings-header">
+          <span class="settings-title">{{ editingMachine.name }}</span>
+          <button @click="closeMachineSettings" class="settings-close">×</button>
+        </div>
+        <div class="settings-content">
+          <div class="setting-row">
+            <label>Ziel-Sätze (Target Sets)</label>
+            <div class="setting-control">
+              <button 
+                @click="editingMachine.settings.targetSets = Math.max(2, editingMachine.settings.targetSets - 1)" 
+                class="btn-stepper"
+                :disabled="editingMachine.settings.targetSets <= 2"
+              >−</button>
+              <span class="setting-value">{{ editingMachine.settings.targetSets }}</span>
+              <button 
+                @click="editingMachine.settings.targetSets = Math.min(5, editingMachine.settings.targetSets + 1)" 
+                class="btn-stepper"
+                :disabled="editingMachine.settings.targetSets >= 5"
+              >+</button>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <label>Gewichts-Schritte (Step Size)</label>
+            <div class="setting-control">
+              <button 
+                @click="editingMachine.settings.stepSize = Math.max(1, editingMachine.settings.stepSize - 0.5)" 
+                class="btn-stepper"
+              >−</button>
+              <span class="setting-value">{{ editingMachine.settings.stepSize }} kg</span>
+              <button 
+                @click="editingMachine.settings.stepSize = Math.min(10, editingMachine.settings.stepSize + 0.5)" 
+                class="btn-stepper"
+              >+</button>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <label>Anfangswert (Starting Weight)</label>
+            <div class="setting-control">
+              <button 
+                @click="editingMachine.settings.startingKg = Math.max(0, editingMachine.settings.startingKg - editingMachine.settings.stepSize)" 
+                class="btn-stepper"
+              >−</button>
+              <span class="setting-value">{{ editingMachine.settings.startingKg }} kg</span>
+              <button 
+                @click="editingMachine.settings.startingKg += editingMachine.settings.stepSize" 
+                class="btn-stepper"
+              >+</button>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <label>Zählrichtung (Count Direction)</label>
+            <div class="setting-control">
+              <button 
+                @click="editingMachine.settings.countDirection = 'up'"
+                class="btn-toggle"
+                :class="{ active: editingMachine.settings.countDirection === 'up' }"
+              >
+                Hoch (↑)
+              </button>
+              <button 
+                @click="editingMachine.settings.countDirection = 'down'"
+                class="btn-toggle"
+                :class="{ active: editingMachine.settings.countDirection === 'down' }"
+              >
+                Runter (↓)
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-help">
+            <p><strong>Ziel-Sätze:</strong> Wie viele Sets du anstrebst (2-5)</p>
+            <p><strong>Gewichts-Schritte:</strong> Wie viel kg sich pro +/− ändern (typisch: 5 kg)</p>
+            <p><strong>Anfangswert:</strong> Standard-Gewicht für neue Tage</p>
+            <p><strong>Zählrichtung:</strong> Hoch = mehr kg ist besser (normal). Runter = weniger kg ist besser (z.B. Klimmzüge mit Unterstützung)</p>
+          </div>
+
+          <button @click="applyMachineSettings" class="btn-primary settings-save">Speichern</button>
         </div>
       </div>
     </div>
@@ -1267,7 +1436,8 @@ body {
 }
 
 .btn-quick,
-.btn-undo {
+.btn-undo,
+.btn-settings {
   width: 44px;
   height: 44px;
   border-radius: 12px;
@@ -1289,6 +1459,16 @@ body {
 .btn-undo {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
+}
+
+.btn-settings {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+}
+
+.btn-settings:active {
+  background: var(--bg-primary);
 }
 
 .btn-collapse {
@@ -1617,38 +1797,44 @@ body {
 /* Override vue-scroll-picker styles for dark iOS theme */
 .picker-wheel-container .vue-scroll-picker {
   height: 100%;
+  background: transparent;
 }
 
 .picker-wheel-container .vue-scroll-picker-item {
-  color: var(--text-secondary);
-  font-size: 1.25rem;
-  height: 44px;
-  line-height: 44px;
+  color: #8e8e93 !important;
+  font-size: 1.25rem !important;
+  height: 44px !important;
+  line-height: 44px !important;
+  opacity: 1 !important;
+  z-index: 2;
 }
 
 .picker-wheel-container .vue-scroll-picker-item-selected {
-  color: var(--text-primary);
-  font-size: 1.5rem;
-  font-weight: 600;
+  color: #ffffff !important;
+  font-size: 1.5rem !important;
+  font-weight: 600 !important;
+  opacity: 1 !important;
 }
 
 .picker-wheel-container .vue-scroll-picker-layer {
-  background: transparent;
+  background: transparent !important;
+  pointer-events: none;
 }
 
 .picker-wheel-container .vue-scroll-picker-layer-top,
 .picker-wheel-container .vue-scroll-picker-layer-bottom {
-  background: linear-gradient(to bottom, var(--bg-secondary), transparent);
+  background: linear-gradient(to bottom, var(--bg-secondary), transparent) !important;
 }
 
 .picker-wheel-container .vue-scroll-picker-layer-bottom {
-  background: linear-gradient(to top, var(--bg-secondary), transparent);
+  background: linear-gradient(to top, var(--bg-secondary), transparent) !important;
 }
 
 .picker-wheel-container .vue-scroll-picker-layer-selection {
-  background: var(--bg-tertiary);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  background: var(--bg-tertiary) !important;
+  border-top: 1px solid var(--border) !important;
+  border-bottom: 1px solid var(--border) !important;
+  z-index: 1;
 }
 
 @media (max-width: 400px) {
@@ -1807,5 +1993,135 @@ body {
 .equipment-nr {
   font-size: 0.875rem;
   color: var(--text-secondary);
+}
+
+/* Machine Settings Modal */
+.settings-modal {
+  background: var(--bg-secondary);
+  border-radius: 16px;
+  width: 90%;
+  max-width: 500px;
+  max-height: 80vh;
+  overflow-y: auto;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+  z-index: 10;
+}
+
+.settings-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-close {
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border-radius: 50%;
+  font-size: 1.75rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding-bottom: 4px;
+}
+
+.settings-close:active {
+  background: var(--border);
+}
+
+.settings-content {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.setting-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.setting-row label {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.setting-control {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.setting-value {
+  flex: 1;
+  text-align: center;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.btn-toggle {
+  flex: 1;
+  padding: 0.75rem;
+  border: 2px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-toggle.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.settings-help {
+  background: var(--bg-tertiary);
+  border-radius: 12px;
+  padding: 1rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.settings-help p {
+  margin-bottom: 0.5rem;
+}
+
+.settings-help p:last-child {
+  margin-bottom: 0;
+}
+
+.settings-help strong {
+  color: var(--text-primary);
+}
+
+.settings-save {
+  margin-top: 0.5rem;
 }
 </style>
