@@ -498,6 +498,37 @@ async function importData() {
   input.click()
 }
 
+async function seedData() {
+  // Check if sessions already exist
+  if (sessions.value.length > 0) {
+    if (!confirm('Vorhandene Daten werden überschrieben. Fortfahren?')) {
+      return
+    }
+  }
+
+  try {
+    const baseUrl = import.meta.env.BASE_URL
+    const response = await fetch(`${baseUrl}happyfit-import-sessions.json`)
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const imported = await response.json()
+    
+    if (!Array.isArray(imported)) {
+      throw new Error('Ungültiges Datenformat')
+    }
+
+    sessions.value = imported
+    await saveSessions()
+    await initWorkouts()
+    alert(`${imported.length} Sessions erfolgreich geladen!`)
+  } catch (err) {
+    alert('Seed fehlgeschlagen: ' + err.message)
+  }
+}
+
 async function resetData() {
   if (confirm('Alle Daten löschen? Dies kann nicht rückgängig gemacht werden.')) {
     await storage.deleteSessions()
@@ -812,6 +843,7 @@ onMounted(async () => {
 
         <div v-if="historyView === 'sessions'" class="sessions-content">
           <div class="history-actions">
+            <button @click="seedData" class="btn-secondary">Seed</button>
             <button @click="exportData" class="btn-secondary">Export</button>
             <button @click="importData" class="btn-secondary">Import</button>
             <button @click="resetData" class="btn-danger">Reset</button>

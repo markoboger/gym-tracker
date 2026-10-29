@@ -1,25 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="HappyFit draft icon  stylized bearded head">
-  <!-- Soft dark tile -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="HappyFit draft icon - stylized bearded head">
   <rect width="512" height="512" rx="112" fill="#111111"/>
-  <!-- Warm accent ring (gym energy) -->
   <circle cx="256" cy="256" r="200" fill="none" stroke="#F59E0B" stroke-width="18"/>
-  <!-- Head silhouette (skin tone) -->
   <ellipse cx="256" cy="210" rx="98" ry="108" fill="#E8C4A8"/>
-  <!-- Short hair / crown -->
   <path fill="#2A2A2A" d="M158 196c8-72 50-108 98-108s90 36 98 108c-18-28-52-44-98-44s-80 16-98 44z"/>
-  <!-- Ears -->
   <ellipse cx="154" cy="220" rx="18" ry="26" fill="#E8C4A8"/>
   <ellipse cx="358" cy="220" rx="18" ry="26" fill="#E8C4A8"/>
-  <!-- Minimal eyes -->
   <circle cx="220" cy="208" r="10" fill="#1A1A1A"/>
   <circle cx="292" cy="208" r="10" fill="#1A1A1A"/>
-  <!-- Soft smile -->
   <path d="M228 248c14 16 42 16 56 0" fill="none" stroke="#C4896A" stroke-width="8" stroke-linecap="round"/>
-  <!-- Full beard (monogram element)  geometric layers -->
-  <path fill="#2A2A2A" d="M168 248c12 8 28 14 44 18 8 28 22 52 44 70 22-18 36-42 44-70 16-4 32-10 44-18
-    4 36-6 78-40 118-18 22-42 36-56 42-14-6-38-20-56-42-34-40-44-82-40-118z"/>
-  <!-- Mustache bridge -->
+  <path fill="#2A2A2A" d="M168 248c12 8 28 14 44 18 8 28 22 52 44 70 22-18 36-42 44-70 16-4 32-10 44-18 4 36-6 78-40 118-18 22-42 36-56 42-14-6-38-20-56-42-34-40-44-82-40-118z"/>
   <path fill="#2A2A2A" d="M196 246c18 22 42 34 60 34s42-12 60-34c-16 10-36 16-60 16s-44-6-60-16z"/>
-  <!-- Chin highlight line for depth -->
   <path d="M236 360c12 10 28 10 40 0" fill="none" stroke="#3D3D3D" stroke-width="6" stroke-linecap="round"/>
 </svg>

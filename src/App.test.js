@@ -13,10 +13,21 @@ vi.mock('./db/index.js', () => ({
   storage: {
     getSessions: vi.fn(() => Promise.resolve([])),
     getMachineSettings: vi.fn(() => Promise.resolve({})),
-    getEnabledEquipment: vi.fn(() => Promise.resolve([]))
+    getEnabledEquipment: vi.fn(() => Promise.resolve([])),
+    putSession: vi.fn(() => Promise.resolve())
   },
   migrateFromLocalStorage: vi.fn(() => Promise.resolve())
 }))
+
+// Mock fetch for seed data test
+global.fetch = vi.fn(() =>
+  Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve([
+      { date: '2024-01-01', workouts: [] }
+    ])
+  })
+)
 
 describe('App Integration', () => {
   beforeEach(() => {
@@ -37,5 +48,23 @@ describe('App Integration', () => {
   it('shows date input', () => {
     const wrapper = mount(App)
     expect(wrapper.find('input[type="date"]').exists()).toBe(true)
+  })
+
+  it('has seedData function available', async () => {
+    const wrapper = mount(App)
+    const vm = wrapper.vm
+    
+    // Verify seedData function exists
+    expect(typeof vm.seedData).toBe('function')
+    
+    // Mock alert and confirm
+    const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    const confirmMock = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    
+    // Call seedData
+    await vm.seedData()
+    
+    alertMock.mockRestore()
+    confirmMock.mockRestore()
   })
 })
