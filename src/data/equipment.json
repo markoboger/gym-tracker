@@ -1,0 +1,212 @@
+[
+  {
+    "id": 1,
+    "nr": "",
+    "name": "Rudern",
+    "defaultKg": 15,
+    "sets": 10,
+    "reps": 15,
+    "isCardio": true,
+    "isSauna": false
+  },
+  {
+    "id": 2,
+    "nr": 18,
+    "name": "Butterfly  ",
+    "defaultKg": 45,
+    "sets": 2,
+    "reps": 15,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 3,
+    "nr": 19,
+    "name": "Butterfly reverse",
+    "defaultKg": 35,
+    "sets": 3,
+    "reps": 8,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 4,
+    "nr": 21,
+    "name": "Bauch Crunch",
+    "defaultKg": 85,
+    "sets": 2,
+    "reps": 15,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 5,
+    "nr": 22,
+    "name": "Rückenstrecker",
+    "defaultKg": 85,
+    "sets": 2,
+    "reps": 15,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 6,
+    "nr": 23,
+    "name": "Preacher",
+    "defaultKg": 35,
+    "sets": 2,
+    "reps": 12,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 7,
+    "nr": 24,
+    "name": "Rotationsmaschine",
+    "defaultKg": 70,
+    "sets": 2,
+    "reps": 15,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 8,
+    "nr": 26,
+    "name": "Klimmzüge unterst. ",
+    "defaultKg": 65,
+    "sets": 2,
+    "reps": 15,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 9,
+    "nr": 29,
+    "name": "Seitenhebemaschine",
+    "defaultKg": 35,
+    "sets": 2,
+    "reps": 15,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 10,
+    "nr": 33,
+    "name": "Beinstrecker",
+    "defaultKg": 60,
+    "sets": 2,
+    "reps": 12,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 11,
+    "nr": 35,
+    "name": "Adduktion",
+    "defaultKg": 109,
+    "sets": 3,
+    "reps": 12,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 12,
+    "nr": 36,
+    "name": "Abduktion",
+    "defaultKg": 93,
+    "sets": 3,
+    "reps": 12,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 13,
+    "nr": "49/50",
+    "name": "Hyperextensions",
+    "defaultKg": 15,
+    "sets": 3,
+    "reps": 8,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 14,
+    "nr": 55,
+    "name": "Hack Squat",
+    "defaultKg": 0,
+    "sets": 2,
+    "reps": 6,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 15,
+    "nr": 62,
+    "name": "T-Bare",
+    "defaultKg": 25,
+    "sets": 3,
+    "reps": 8,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 16,
+    "nr": 68,
+    "name": "Brustpresse liegend",
+    "defaultKg": 7,
+    "sets": 3,
+    "reps": 8,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 17,
+    "nr": "frei",
+    "name": "Klimmzüge",
+    "defaultKg": 6,
+    "sets": 3,
+    "reps": 12,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 18,
+    "nr": "",
+    "name": "Bauchtrainer",
+    "defaultKg": 0,
+    "sets": 2,
+    "reps": 15,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 19,
+    "nr": "Kabelzug",
+    "name": "Hor. Außenrotation",
+    "defaultKg": 10,
+    "sets": 2,
+    "reps": 12,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 20,
+    "nr": "Functional",
+    "name": "Beinheben mit Schlaufen",
+    "defaultKg": 0,
+    "sets": 3,
+    "reps": 10,
+    "isCardio": false,
+    "isSauna": false
+  },
+  {
+    "id": 21,
+    "nr": "Sauna",
+    "name": "Schneidersitz",
+    "defaultKg": 0,
+    "sets": 2,
+    "reps": 15,
+    "isCardio": false,
+    "isSauna": true
+  }
+]
