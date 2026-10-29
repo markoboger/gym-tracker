@@ -11,9 +11,22 @@ const showChart = ref(false)
 const selectedExerciseId = ref(null)
 const selectedSeason = ref(null)
 const historyView = ref('sessions') // 'sessions' or 'chart'
+const showConfigurator = ref(false)
+const enabledEquipment = ref(new Set())
 
 const todaySession = computed(() => {
   return sessions.value.find(s => s.date === currentDate.value)
+})
+
+const enabledEquipmentList = computed(() => {
+  return equipmentData.filter(eq => enabledEquipment.value.has(eq.id))
+})
+
+const allEquipmentList = computed(() => {
+  return equipmentData.map(eq => ({
+    ...eq,
+    enabled: enabledEquipment.value.has(eq.id)
+  }))
 })
 
 function getSeasonFromDate(dateStr) {
@@ -60,7 +73,8 @@ const availableExercises = computed(() => {
   
   filteredSessions.value.forEach(session => {
     session.workouts.forEach(workout => {
-      if (!workout.isSauna && workout.kg > 0) {
+      // Only include enabled equipment
+      if (!workout.isSauna && workout.kg > 0 && enabledEquipment.value.has(workout.equipmentId)) {
         if (!exerciseMap.has(workout.equipmentId)) {
           exerciseMap.set(workout.equipmentId, {
             id: workout.equipmentId,
@@ -118,9 +132,12 @@ const selectedExerciseName = computed(() => {
 function initWorkouts() {
   const existingSession = sessions.value.find(s => s.date === currentDate.value)
   
+  // Only include enabled equipment
+  const enabledEquipmentData = equipmentData.filter(eq => enabledEquipment.value.has(eq.id))
+  
   if (!existingSession) {
-    // Create fresh workout list from equipment defaults
-    workouts.value = equipmentData.map(eq => ({
+    // Create fresh workout list from enabled equipment defaults
+    workouts.value = enabledEquipmentData.map(eq => ({
       equipmentId: eq.id,
       name: eq.name,
       nr: eq.nr,
@@ -134,12 +151,12 @@ function initWorkouts() {
       completed: false
     }))
   } else {
-    // Load existing session - expand to show all equipment
+    // Load existing session - expand to show all enabled equipment
     const sessionWorkoutMap = new Map(
       existingSession.workouts.map(w => [w.equipmentId, w])
     )
     
-    workouts.value = equipmentData.map(eq => {
+    workouts.value = enabledEquipmentData.map(eq => {
       const existing = sessionWorkoutMap.get(eq.id)
       if (existing) {
         return { ...existing, completed: true }
@@ -171,6 +188,27 @@ function loadSessions() {
 
 function saveSessions() {
   localStorage.setItem('happyfit-sessions', JSON.stringify(sessions.value))
+}
+
+function loadEnabledEquipment() {
+  const stored = localStorage.getItem('happyfit-enabled-equipment')
+  if (stored) {
+    try {
+      const ids = JSON.parse(stored)
+      enabledEquipment.value = new Set(ids)
+    } catch (e) {
+      // Default: enable all
+      enabledEquipment.value = new Set(equipmentData.map(eq => eq.id))
+    }
+  } else {
+    // Default: enable all
+    enabledEquipment.value = new Set(equipmentData.map(eq => eq.id))
+  }
+}
+
+function saveEnabledEquipment() {
+  const ids = Array.from(enabledEquipment.value)
+  localStorage.setItem('happyfit-enabled-equipment', JSON.stringify(ids))
 }
 
 function saveToday() {
@@ -359,7 +397,36 @@ function resetData() {
   }
 }
 
+function openConfigurator() {
+  showConfigurator.value = true
+}
+
+function closeConfigurator() {
+  showConfigurator.value = false
+  initWorkouts() // Refresh workouts list with new enabled equipment
+}
+
+function toggleEquipment(equipmentId) {
+  if (enabledEquipment.value.has(equipmentId)) {
+    enabledEquipment.value.delete(equipmentId)
+  } else {
+    enabledEquipment.value.add(equipmentId)
+  }
+  saveEnabledEquipment()
+}
+
+function enableAll() {
+  enabledEquipment.value = new Set(equipmentData.map(eq => eq.id))
+  saveEnabledEquipment()
+}
+
+function disableAll() {
+  enabledEquipment.value = new Set()
+  saveEnabledEquipment()
+}
+
 onMounted(() => {
+  loadEnabledEquipment()
   loadSessions()
   initWorkouts()
 })
@@ -368,6 +435,11 @@ onMounted(() => {
 <template>
   <div class="app">
     <header class="header">
+      <div class="header-left">
+        <button v-if="!showHistory && !editingSession" @click="openConfigurator" class="btn-icon" title="Geräte konfigurieren">
+          ⚙️
+        </button>
+      </div>
       <h1>💪 HappyFit</h1>
       <div class="header-actions">
         <button v-if="showHistory" @click="backToToday" class="btn-secondary">← Heute</button>
@@ -668,6 +740,46 @@ onMounted(() => {
         </div>
       </div>
     </main>
+
+    <!-- Configurator Modal -->
+    <div v-if="showConfigurator" class="modal-overlay" @click="closeConfigurator">
+      <div class="modal-content configurator" @click.stop>
+        <div class="modal-header">
+          <h2>Geräte konfigurieren</h2>
+          <button @click="closeConfigurator" class="btn-close">✕</button>
+        </div>
+        
+        <div class="modal-body">
+          <div class="config-actions">
+            <button @click="enableAll" class="btn-secondary btn-small">Alle aktivieren</button>
+            <button @click="disableAll" class="btn-secondary btn-small">Alle deaktivieren</button>
+          </div>
+
+          <div class="equipment-list">
+            <label 
+              v-for="equipment in allEquipmentList" 
+              :key="equipment.id"
+              class="equipment-item"
+            >
+              <input 
+                type="checkbox" 
+                :checked="equipment.enabled"
+                @change="toggleEquipment(equipment.id)"
+                class="equipment-checkbox"
+              />
+              <span class="equipment-info">
+                <span class="equipment-name">{{ equipment.name }}</span>
+                <span class="equipment-nr" v-if="equipment.nr">Nr. {{ equipment.nr }}</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button @click="closeConfigurator" class="btn-primary">Fertig</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -717,14 +829,42 @@ body {
   align-items: center;
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  min-width: 44px;
+}
+
 .header h1 {
   font-size: 1.5rem;
   font-weight: 600;
+  flex: 1;
+  text-align: center;
 }
 
 .header-actions {
   display: flex;
   gap: 0.5rem;
+  min-width: 44px;
+  justify-content: flex-end;
+}
+
+.btn-icon {
+  width: 44px;
+  height: 44px;
+  background: var(--bg-tertiary);
+  border: none;
+  border-radius: 12px;
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-icon:active {
+  background: var(--border);
 }
 
 .main {
@@ -1149,5 +1289,145 @@ body {
     min-width: 120px;
     max-width: 160px;
   }
+}
+
+/* Modal & Configurator */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  backdrop-filter: blur(4px);
+}
+
+.modal-content {
+  background: var(--bg-secondary);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 500px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.btn-close {
+  width: 36px;
+  height: 36px;
+  background: var(--bg-tertiary);
+  border: none;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-close:hover {
+  background: var(--border);
+}
+
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.modal-footer {
+  padding: 1rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.btn-primary {
+  padding: 0.75rem 2rem;
+  background: var(--accent);
+  border: none;
+  border-radius: 12px;
+  color: white;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-primary:active {
+  background: var(--accent-dark);
+}
+
+.btn-small {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+.config-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.equipment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.equipment-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  background: var(--bg-tertiary);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.equipment-item:hover {
+  background: var(--border);
+}
+
+.equipment-checkbox {
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.equipment-info {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.equipment-name {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.equipment-nr {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
 }
 </style>
