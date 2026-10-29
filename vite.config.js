@@ -7,6 +7,9 @@ export default defineConfig(({ command }) => ({
   plugins: [vue()],
   server: {
     port: 5874,
-    host: true
+    host: true,
+    headers: {
+      'Cache-Control': 'no-store'
+    }
   }
 }))

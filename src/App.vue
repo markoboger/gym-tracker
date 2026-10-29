@@ -16,23 +16,28 @@ const sortedSessions = computed(() => {
   return [...sessions.value].sort((a, b) => new Date(b.date) - new Date(a.date))
 })
 
+function seedWorkoutsFromEquipment() {
+  return equipmentData.map(eq => ({
+    equipmentId: eq.id,
+    name: eq.name,
+    nr: eq.nr,
+    kg: eq.defaultKg,
+    sets: eq.sets,
+    reps: eq.reps,
+    meters: eq.isCardio ? 0 : null,
+    minutes: eq.isCardio || eq.isSauna ? 0 : null,
+    isCardio: eq.isCardio,
+    isSauna: eq.isSauna,
+    completed: false
+  }))
+}
+
 function initWorkouts() {
-  if (!todaySession.value) {
-    workouts.value = equipmentData.map(eq => ({
-      equipmentId: eq.id,
-      name: eq.name,
-      nr: eq.nr,
-      kg: eq.defaultKg,
-      sets: eq.sets,
-      reps: eq.reps,
-      meters: eq.isCardio ? 0 : null,
-      minutes: eq.isCardio || eq.isSauna ? 0 : null,
-      isCardio: eq.isCardio,
-      isSauna: eq.isSauna,
-      completed: false
-    }))
+  const existing = todaySession.value
+  if (existing && Array.isArray(existing.workouts) && existing.workouts.length > 0) {
+    workouts.value = existing.workouts
   } else {
-    workouts.value = todaySession.value.workouts
+    workouts.value = seedWorkoutsFromEquipment()
   }
 }
 
@@ -174,6 +179,9 @@ onMounted(() => {
           <input type="date" v-model="currentDate" @change="initWorkouts" class="date-input" />
         </div>
 
+        <div v-if="workouts.length === 0" class="empty-state">
+          Keine Übungen geladen — tippe auf das Datum oder lade neu.
+        </div>
         <div class="workouts-list">
           <div 
             v-for="workout in workouts" 
