@@ -6,7 +6,7 @@ export default defineConfig(({ command }) => ({
   base: command === 'build' ? '/gym-tracker/' : '/',
   plugins: [vue()],
   server: {
-    port: 5874,
+    port: 5888,
     host: true,
     headers: {
       'Cache-Control': 'no-store'

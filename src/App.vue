@@ -1,5 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { VueScrollPicker } from 'vue-scroll-picker'
+import 'vue-scroll-picker/style.css'
 import equipmentData from './data/equipment.json'
 
 const currentDate = ref(new Date().toISOString().split('T')[0])
@@ -176,7 +178,7 @@ function initWorkouts(isNewDay = false) {
             isCardio: eq.isCardio,
             isSauna: eq.isSauna,
             completed: false,
-            collapsed: false
+            collapsed: true
           }
         }
       }
@@ -194,7 +196,7 @@ function initWorkouts(isNewDay = false) {
         isCardio: eq.isCardio,
         isSauna: eq.isSauna,
         completed: false,
-        collapsed: false
+        collapsed: true
       }
     })
   } else {
@@ -224,7 +226,7 @@ function initWorkouts(isNewDay = false) {
           isCardio: eq.isCardio,
           isSauna: eq.isSauna,
           completed: false,
-          collapsed: false
+          collapsed: true
         }
       }
     })
@@ -281,9 +283,7 @@ function saveToday() {
 
 function toggleComplete(workout) {
   workout.completed = !workout.completed
-  if (!workout.completed) {
-    workout.collapsed = false
-  }
+  workout.collapsed = true
   saveToday()
 }
 
@@ -295,6 +295,10 @@ function quickLog(workout) {
 
 function toggleCollapse(workout) {
   workout.collapsed = !workout.collapsed
+}
+
+function enterEditMode(workout) {
+  workout.collapsed = false
 }
 
 function increment(workout, field) {
@@ -509,19 +513,6 @@ function openPicker(workout, field) {
   pickerField.value = field
   pickerValue.value = workout[field]
   showPicker.value = true
-  
-  // Scroll to selected value after modal opens
-  setTimeout(() => {
-    const wheel = document.querySelector('.picker-wheel')
-    const options = document.querySelectorAll('.picker-option')
-    const range = getPickerRange(field)
-    const index = range.indexOf(workout[field])
-    
-    if (wheel && options[index]) {
-      const scrollTarget = options[index].offsetTop - (wheel.clientHeight / 2) + 22
-      wheel.scrollTo({ top: scrollTarget, behavior: 'instant' })
-    }
-  }, 50)
 }
 
 function closePicker() {
@@ -554,46 +545,8 @@ function getPickerRange(field) {
   return []
 }
 
-let scrollTimeout = null
-function handlePickerScroll(event) {
-  clearTimeout(scrollTimeout)
-  scrollTimeout = setTimeout(() => {
-    const wheel = event.target
-    const centerY = wheel.scrollTop + wheel.clientHeight / 2
-    const options = wheel.querySelectorAll('.picker-option')
-    const range = getPickerRange(pickerField.value)
-    
-    let closestIndex = 0
-    let closestDistance = Infinity
-    
-    options.forEach((option, index) => {
-      const optionCenter = option.offsetTop + 22
-      const distance = Math.abs(centerY - optionCenter)
-      if (distance < closestDistance) {
-        closestDistance = distance
-        closestIndex = index
-      }
-    })
-    
-    pickerValue.value = range[closestIndex]
-    
-    // Snap to center
-    const targetScroll = options[closestIndex].offsetTop - (wheel.clientHeight / 2) + 22
-    wheel.scrollTo({ top: targetScroll, behavior: 'smooth' })
-  }, 100)
-}
-
-function scrollToValue(value) {
-  pickerValue.value = value
-  const wheel = document.querySelector('.picker-wheel')
-  const options = document.querySelectorAll('.picker-option')
-  const range = getPickerRange(pickerField.value)
-  const index = range.indexOf(value)
-  
-  if (wheel && options[index]) {
-    const scrollTarget = options[index].offsetTop - (wheel.clientHeight / 2) + 22
-    wheel.scrollTo({ top: scrollTarget, behavior: 'smooth' })
-  }
+function handlePickerChange(newValue) {
+  pickerValue.value = newValue
 }
 
 onMounted(() => {
@@ -642,41 +595,59 @@ onMounted(() => {
           >
             <div 
               class="workout-header"
-              @click="workout.completed && workout.collapsed ? toggleCollapse(workout) : null"
-              :class="{ clickable: workout.completed && workout.collapsed }"
+              @click="workout.collapsed ? enterEditMode(workout) : null"
+              :class="{ clickable: workout.collapsed }"
             >
               <div class="workout-title">
-                <span class="workout-nr" v-if="workout.nr">{{ workout.nr }}</span>
-                <span class="workout-name">{{ workout.name }}</span>
-                <span v-if="workout.completed && workout.collapsed" class="workout-summary">
+                <div class="title-line">
+                  <span class="workout-nr" v-if="workout.nr">{{ workout.nr }}</span>
+                  <span class="workout-name">{{ workout.name }}</span>
+                </div>
+                <span v-if="workout.collapsed" class="workout-summary">
                   {{ workout.kg > 0 ? workout.kg + 'kg' : '' }}
-                  {{ workout.sets > 0 ? ' • ' + workout.sets + '×' + workout.reps : '' }}
+                  {{ workout.sets > 0 ? ' · ' + workout.sets + '×' + workout.reps : '' }}
                 </span>
               </div>
               <div class="header-actions">
                 <button 
-                  v-if="workout.completed && !workout.collapsed"
-                  @click.stop="toggleCollapse(workout)"
-                  class="btn-collapse"
-                  title="Minimieren"
-                >
-                  ▼
-                </button>
-                <button 
                   @click.stop="quickLog(workout)"
                   class="btn-quick"
-                  v-if="!workout.completed"
+                  v-if="!workout.collapsed"
                 >
                   ✓
                 </button>
                 <button 
                   @click.stop="toggleComplete(workout)"
                   class="btn-undo"
-                  v-else
+                  v-if="workout.completed && !workout.collapsed"
                   title="Rückgängig"
                 >
                   ↶
                 </button>
+              </div>
+            </div>
+
+            <!-- Compact steppers when collapsed -->
+            <div v-if="workout.collapsed" class="compact-controls">
+              <div class="compact-stepper" v-if="!workout.isSauna">
+                <span class="control-label">kg</span>
+                <button @click="decrement(workout, 'kg')" class="btn-micro">−</button>
+                <span class="control-value">{{ workout.kg }}</span>
+                <button @click="increment(workout, 'kg')" class="btn-micro">+</button>
+              </div>
+
+              <div class="compact-stepper">
+                <span class="control-label">Sets</span>
+                <button @click="decrement(workout, 'sets')" class="btn-micro">−</button>
+                <span class="control-value">{{ workout.sets }}</span>
+                <button @click="increment(workout, 'sets')" class="btn-micro">+</button>
+              </div>
+
+              <div class="compact-stepper" v-if="!workout.isCardio && !workout.isSauna">
+                <span class="control-label">Reps</span>
+                <button @click="decrement(workout, 'reps')" class="btn-micro">−</button>
+                <span class="control-value">{{ workout.reps }}</span>
+                <button @click="increment(workout, 'reps')" class="btn-micro">+</button>
               </div>
             </div>
 
@@ -970,7 +941,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Number Picker Modal -->
+    <!-- Number Picker Modal (vue-scroll-picker) -->
     <div v-if="showPicker" class="picker-overlay" @click="closePicker">
       <div class="picker-modal" @click.stop>
         <div class="picker-header">
@@ -979,22 +950,11 @@ onMounted(() => {
           <button @click="applyPickerValue" class="picker-done">Fertig</button>
         </div>
         <div class="picker-wheel-container">
-          <div class="picker-selection-indicator"></div>
-          <div 
-            class="picker-wheel"
-            @scroll="handlePickerScroll"
-            ref="pickerWheel"
-          >
-            <div 
-              v-for="value in getPickerRange(pickerField)"
-              :key="value"
-              @click="scrollToValue(value)"
-              class="picker-option"
-              :class="{ selected: pickerValue === value }"
-            >
-              {{ value }}{{ pickerField === 'kg' ? ' kg' : '' }}
-            </div>
-          </div>
+          <VueScrollPicker 
+            v-model="pickerValue"
+            :options="getPickerRange(pickerField)"
+            @update:modelValue="handlePickerChange"
+          />
         </div>
       </div>
     </div>
@@ -1157,11 +1117,10 @@ body {
 
 .workout-card.collapsed {
   padding: 0.75rem 1rem;
-  opacity: 0.6;
 }
 
 .workout-card.collapsed:active {
-  opacity: 0.8;
+  opacity: 0.95;
 }
 
 .workout-header {
@@ -1187,6 +1146,12 @@ body {
   gap: 0.25rem;
 }
 
+.title-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .header-actions {
   display: flex;
   gap: 0.5rem;
@@ -1209,9 +1174,10 @@ body {
 }
 
 .workout-summary {
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   color: var(--text-secondary);
   font-weight: 400;
+  margin-top: 0.125rem;
 }
 
 .workout-controls {
@@ -1362,6 +1328,64 @@ body {
 }
 
 .btn-collapse:active {
+  transform: scale(0.95);
+}
+
+/* Compact Controls */
+.compact-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.625rem;
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--border);
+}
+
+.compact-stepper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  background: var(--bg-tertiary);
+  padding: 0.375rem 0.25rem;
+  border-radius: 8px;
+}
+
+.control-label {
+  font-size: 0.625rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  min-width: 24px;
+}
+
+.control-value {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 28px;
+  text-align: center;
+}
+
+.btn-micro {
+  width: 28px;
+  height: 28px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.btn-micro:active {
+  background: var(--border);
   transform: scale(0.95);
 }
 
@@ -1666,50 +1690,47 @@ body {
 }
 
 .picker-wheel-container {
-  position: relative;
   flex: 1;
   overflow: hidden;
-  padding: 1rem 0;
+  padding: 0;
+  height: 260px;
 }
 
-.picker-selection-indicator {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
+/* Override vue-scroll-picker styles for dark iOS theme */
+.picker-wheel-container .vue-scroll-picker {
+  height: 100%;
+}
+
+.picker-wheel-container .vue-scroll-picker-item {
+  color: var(--text-secondary);
+  font-size: 1.25rem;
   height: 44px;
+  line-height: 44px;
+}
+
+.picker-wheel-container .vue-scroll-picker-item-selected {
+  color: var(--text-primary);
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.picker-wheel-container .vue-scroll-picker-layer {
+  background: transparent;
+}
+
+.picker-wheel-container .vue-scroll-picker-layer-top,
+.picker-wheel-container .vue-scroll-picker-layer-bottom {
+  background: linear-gradient(to bottom, var(--bg-secondary), transparent);
+}
+
+.picker-wheel-container .vue-scroll-picker-layer-bottom {
+  background: linear-gradient(to top, var(--bg-secondary), transparent);
+}
+
+.picker-wheel-container .vue-scroll-picker-layer-selection {
   background: var(--bg-tertiary);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  pointer-events: none;
-  z-index: 1;
-}
-
-.picker-wheel {
-  height: 100%;
-  overflow-y: auto;
-  scroll-snap-type: y mandatory;
-  padding: calc(50% - 22px) 0;
-  -webkit-overflow-scrolling: touch;
-}
-
-.picker-option {
-  height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.25rem;
-  color: var(--text-secondary);
-  cursor: pointer;
-  scroll-snap-align: center;
-  transition: all 0.2s;
-}
-
-.picker-option.selected {
-  color: var(--text-primary);
-  font-weight: 600;
-  font-size: 1.5rem;
 }
 
 @media (max-width: 400px) {
