@@ -13,6 +13,10 @@ const selectedSeason = ref(null)
 const historyView = ref('sessions') // 'sessions' or 'chart'
 const showConfigurator = ref(false)
 const enabledEquipment = ref(new Set())
+const showPicker = ref(false)
+const pickerWorkout = ref(null)
+const pickerField = ref('')
+const pickerValue = ref(0)
 
 const todaySession = computed(() => {
   return sessions.value.find(s => s.date === currentDate.value)
@@ -171,7 +175,8 @@ function initWorkouts(isNewDay = false) {
             minutes: (eq.isCardio || eq.isSauna) ? (recentWorkout.minutes || 0) : null,
             isCardio: eq.isCardio,
             isSauna: eq.isSauna,
-            completed: false
+            completed: false,
+            collapsed: false
           }
         }
       }
@@ -188,7 +193,8 @@ function initWorkouts(isNewDay = false) {
         minutes: (eq.isCardio || eq.isSauna) ? 0 : null,
         isCardio: eq.isCardio,
         isSauna: eq.isSauna,
-        completed: false
+        completed: false,
+        collapsed: false
       }
     })
   } else {
@@ -200,7 +206,11 @@ function initWorkouts(isNewDay = false) {
     workouts.value = enabledEquipmentData.map(eq => {
       const existing = sessionWorkoutMap.get(eq.id)
       if (existing) {
-        return { ...existing, completed: true }
+        return { 
+          ...existing, 
+          completed: true,
+          collapsed: existing.collapsed !== undefined ? existing.collapsed : true
+        }
       } else {
         return {
           equipmentId: eq.id,
@@ -213,7 +223,8 @@ function initWorkouts(isNewDay = false) {
           minutes: (eq.isCardio || eq.isSauna) ? 0 : null,
           isCardio: eq.isCardio,
           isSauna: eq.isSauna,
-          completed: false
+          completed: false,
+          collapsed: false
         }
       }
     })
@@ -270,12 +281,20 @@ function saveToday() {
 
 function toggleComplete(workout) {
   workout.completed = !workout.completed
+  if (!workout.completed) {
+    workout.collapsed = false
+  }
   saveToday()
 }
 
 function quickLog(workout) {
   workout.completed = true
+  workout.collapsed = true
   saveToday()
+}
+
+function toggleCollapse(workout) {
+  workout.collapsed = !workout.collapsed
 }
 
 function increment(workout, field) {
@@ -485,6 +504,98 @@ function createNewDay() {
   initWorkouts(true)
 }
 
+function openPicker(workout, field) {
+  pickerWorkout.value = workout
+  pickerField.value = field
+  pickerValue.value = workout[field]
+  showPicker.value = true
+  
+  // Scroll to selected value after modal opens
+  setTimeout(() => {
+    const wheel = document.querySelector('.picker-wheel')
+    const options = document.querySelectorAll('.picker-option')
+    const range = getPickerRange(field)
+    const index = range.indexOf(workout[field])
+    
+    if (wheel && options[index]) {
+      const scrollTarget = options[index].offsetTop - (wheel.clientHeight / 2) + 22
+      wheel.scrollTo({ top: scrollTarget, behavior: 'instant' })
+    }
+  }, 50)
+}
+
+function closePicker() {
+  showPicker.value = false
+  pickerWorkout.value = null
+  pickerField.value = ''
+}
+
+function applyPickerValue() {
+  if (pickerWorkout.value && pickerField.value) {
+    pickerWorkout.value[pickerField.value] = pickerValue.value
+    saveToday()
+  }
+  closePicker()
+}
+
+function getPickerRange(field) {
+  if (field === 'kg') {
+    // 0 to 200 kg in 2.5 kg increments
+    const values = []
+    for (let i = 0; i <= 200; i += 2.5) {
+      values.push(Math.round(i * 10) / 10)
+    }
+    return values
+  } else if (field === 'sets') {
+    return Array.from({ length: 11 }, (_, i) => i) // 0-10
+  } else if (field === 'reps') {
+    return Array.from({ length: 51 }, (_, i) => i) // 0-50
+  }
+  return []
+}
+
+let scrollTimeout = null
+function handlePickerScroll(event) {
+  clearTimeout(scrollTimeout)
+  scrollTimeout = setTimeout(() => {
+    const wheel = event.target
+    const centerY = wheel.scrollTop + wheel.clientHeight / 2
+    const options = wheel.querySelectorAll('.picker-option')
+    const range = getPickerRange(pickerField.value)
+    
+    let closestIndex = 0
+    let closestDistance = Infinity
+    
+    options.forEach((option, index) => {
+      const optionCenter = option.offsetTop + 22
+      const distance = Math.abs(centerY - optionCenter)
+      if (distance < closestDistance) {
+        closestDistance = distance
+        closestIndex = index
+      }
+    })
+    
+    pickerValue.value = range[closestIndex]
+    
+    // Snap to center
+    const targetScroll = options[closestIndex].offsetTop - (wheel.clientHeight / 2) + 22
+    wheel.scrollTo({ top: targetScroll, behavior: 'smooth' })
+  }, 100)
+}
+
+function scrollToValue(value) {
+  pickerValue.value = value
+  const wheel = document.querySelector('.picker-wheel')
+  const options = document.querySelectorAll('.picker-option')
+  const range = getPickerRange(pickerField.value)
+  const index = range.indexOf(value)
+  
+  if (wheel && options[index]) {
+    const scrollTarget = options[index].offsetTop - (wheel.clientHeight / 2) + 22
+    wheel.scrollTo({ top: scrollTarget, behavior: 'smooth' })
+  }
+}
+
 onMounted(() => {
   loadEnabledEquipment()
   loadSessions()
@@ -527,70 +638,83 @@ onMounted(() => {
             v-for="workout in workouts" 
             :key="workout.equipmentId"
             class="workout-card"
-            :class="{ completed: workout.completed }"
+            :class="{ completed: workout.completed, collapsed: workout.collapsed }"
           >
-            <div class="workout-header">
+            <div 
+              class="workout-header"
+              @click="workout.completed && workout.collapsed ? toggleCollapse(workout) : null"
+              :class="{ clickable: workout.completed && workout.collapsed }"
+            >
               <div class="workout-title">
                 <span class="workout-nr" v-if="workout.nr">{{ workout.nr }}</span>
                 <span class="workout-name">{{ workout.name }}</span>
+                <span v-if="workout.completed && workout.collapsed" class="workout-summary">
+                  {{ workout.kg > 0 ? workout.kg + 'kg' : '' }}
+                  {{ workout.sets > 0 ? ' • ' + workout.sets + '×' + workout.reps : '' }}
+                </span>
               </div>
-              <button 
-                @click="quickLog(workout)"
-                class="btn-quick"
-                v-if="!workout.completed"
-              >
-                ✓
-              </button>
-              <button 
-                @click="toggleComplete(workout)"
-                class="btn-undo"
-                v-else
-              >
-                ↶
-              </button>
+              <div class="header-actions">
+                <button 
+                  v-if="workout.completed && !workout.collapsed"
+                  @click.stop="toggleCollapse(workout)"
+                  class="btn-collapse"
+                  title="Minimieren"
+                >
+                  ▼
+                </button>
+                <button 
+                  @click.stop="quickLog(workout)"
+                  class="btn-quick"
+                  v-if="!workout.completed"
+                >
+                  ✓
+                </button>
+                <button 
+                  @click.stop="toggleComplete(workout)"
+                  class="btn-undo"
+                  v-else
+                  title="Rückgängig"
+                >
+                  ↶
+                </button>
+              </div>
             </div>
 
-            <div class="workout-controls">
-              <div class="control-group" v-if="!workout.isSauna">
+            <div v-if="!workout.collapsed" class="workout-controls">
+              <div class="control-group compact" v-if="!workout.isSauna">
                 <label>kg</label>
-                <div class="stepper">
-                  <button @click="decrement(workout, 'kg')" class="btn-stepper">−</button>
-                  <input 
-                    type="number" 
-                    v-model.number="workout.kg" 
-                    @change="saveToday"
-                    class="input-number"
-                  />
-                  <button @click="increment(workout, 'kg')" class="btn-stepper">+</button>
-                </div>
+                <button @click="decrement(workout, 'kg')" class="btn-stepper-mini">−</button>
+                <button 
+                  @click="openPicker(workout, 'kg')"
+                  class="picker-trigger"
+                >
+                  {{ workout.kg }}
+                </button>
+                <button @click="increment(workout, 'kg')" class="btn-stepper-mini">+</button>
               </div>
 
-              <div class="control-group">
+              <div class="control-group compact">
                 <label>Sets</label>
-                <div class="stepper">
-                  <button @click="decrement(workout, 'sets')" class="btn-stepper">−</button>
-                  <input 
-                    type="number" 
-                    v-model.number="workout.sets" 
-                    @change="saveToday"
-                    class="input-number"
-                  />
-                  <button @click="increment(workout, 'sets')" class="btn-stepper">+</button>
-                </div>
+                <button @click="decrement(workout, 'sets')" class="btn-stepper-mini">−</button>
+                <button 
+                  @click="openPicker(workout, 'sets')"
+                  class="picker-trigger"
+                >
+                  {{ workout.sets }}
+                </button>
+                <button @click="increment(workout, 'sets')" class="btn-stepper-mini">+</button>
               </div>
 
-              <div class="control-group" v-if="!workout.isCardio && !workout.isSauna">
+              <div class="control-group compact" v-if="!workout.isCardio && !workout.isSauna">
                 <label>Reps</label>
-                <div class="stepper">
-                  <button @click="decrement(workout, 'reps')" class="btn-stepper">−</button>
-                  <input 
-                    type="number" 
-                    v-model.number="workout.reps" 
-                    @change="saveToday"
-                    class="input-number"
-                  />
-                  <button @click="increment(workout, 'reps')" class="btn-stepper">+</button>
-                </div>
+                <button @click="decrement(workout, 'reps')" class="btn-stepper-mini">−</button>
+                <button 
+                  @click="openPicker(workout, 'reps')"
+                  class="picker-trigger"
+                >
+                  {{ workout.reps }}
+                </button>
+                <button @click="increment(workout, 'reps')" class="btn-stepper-mini">+</button>
               </div>
 
               <div class="control-group" v-if="workout.isCardio || workout.isSauna">
@@ -845,6 +969,35 @@ onMounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- Number Picker Modal -->
+    <div v-if="showPicker" class="picker-overlay" @click="closePicker">
+      <div class="picker-modal" @click.stop>
+        <div class="picker-header">
+          <button @click="closePicker" class="picker-cancel">Abbrechen</button>
+          <span class="picker-title">{{ pickerField === 'kg' ? 'Kilogramm' : pickerField === 'sets' ? 'Sets' : 'Reps' }}</span>
+          <button @click="applyPickerValue" class="picker-done">Fertig</button>
+        </div>
+        <div class="picker-wheel-container">
+          <div class="picker-selection-indicator"></div>
+          <div 
+            class="picker-wheel"
+            @scroll="handlePickerScroll"
+            ref="pickerWheel"
+          >
+            <div 
+              v-for="value in getPickerRange(pickerField)"
+              :key="value"
+              @click="scrollToValue(value)"
+              class="picker-option"
+              :class="{ selected: pickerValue === value }"
+            >
+              {{ value }}{{ pickerField === 'kg' ? ' kg' : '' }}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1002,6 +1155,15 @@ body {
   opacity: 0.8;
 }
 
+.workout-card.collapsed {
+  padding: 0.75rem 1rem;
+  opacity: 0.6;
+}
+
+.workout-card.collapsed:active {
+  opacity: 0.8;
+}
+
 .workout-header {
   display: flex;
   justify-content: space-between;
@@ -1009,8 +1171,26 @@ body {
   margin-bottom: 0.75rem;
 }
 
+.workout-header.clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.workout-card.collapsed .workout-header {
+  margin-bottom: 0;
+}
+
 .workout-title {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.header-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .workout-nr {
@@ -1028,25 +1208,43 @@ body {
   font-weight: 500;
 }
 
+.workout-summary {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
 .workout-controls {
   display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+  gap: 0.375rem;
+  flex-wrap: nowrap;
+  justify-content: space-between;
 }
 
 .control-group {
   flex: 1 1 auto;
   min-width: 0;
   max-width: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.control-group.compact {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: none;
+  gap: 0.25rem;
 }
 
 .control-group label {
   display: block;
-  font-size: 0.75rem;
+  font-size: 0.625rem;
   color: var(--text-secondary);
-  margin-bottom: 0.25rem;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  text-align: center;
+  width: 100%;
 }
 
 .stepper {
@@ -1071,6 +1269,46 @@ body {
 
 .btn-stepper:active {
   background: var(--border);
+}
+
+.btn-stepper-mini {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  background: var(--bg-tertiary);
+  border: none;
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 1.125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-stepper-mini:active {
+  background: var(--border);
+}
+
+.picker-trigger {
+  flex: 1 1 auto;
+  min-width: 44px;
+  height: 44px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 1.125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.picker-trigger:active {
+  background: var(--border);
+  transform: scale(0.98);
 }
 
 .input-number {
@@ -1109,6 +1347,22 @@ body {
 .btn-undo {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
+}
+
+.btn-collapse {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: none;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-collapse:active {
+  transform: scale(0.95);
 }
 
 .btn-secondary {
@@ -1361,14 +1615,111 @@ body {
   color: var(--text-secondary);
 }
 
+/* Number Picker */
+.picker-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 200;
+  display: flex;
+  align-items: flex-end;
+  backdrop-filter: blur(4px);
+}
+
+.picker-modal {
+  background: var(--bg-secondary);
+  border-radius: 16px 16px 0 0;
+  width: 100%;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.picker-cancel,
+.picker-done {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0.5rem;
+}
+
+.picker-cancel {
+  color: var(--text-secondary);
+}
+
+.picker-wheel-container {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  padding: 1rem 0;
+}
+
+.picker-selection-indicator {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 44px;
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.picker-wheel {
+  height: 100%;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  padding: calc(50% - 22px) 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.picker-option {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  scroll-snap-align: center;
+  transition: all 0.2s;
+}
+
+.picker-option.selected {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 1.5rem;
+}
+
 @media (max-width: 400px) {
-  .control-group {
+  .control-group:not(.compact) {
     flex: 1 1 calc(50% - 0.25rem);
     max-width: none;
   }
   
   .workout-controls {
-    gap: 0.5rem;
+    gap: 0.375rem;
   }
 }
 
