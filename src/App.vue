@@ -627,30 +627,6 @@ onMounted(() => {
               </div>
             </div>
 
-            <!-- Compact steppers when collapsed -->
-            <div v-if="workout.collapsed" class="compact-controls">
-              <div class="compact-stepper" v-if="!workout.isSauna">
-                <span class="control-label">kg</span>
-                <button @click="decrement(workout, 'kg')" class="btn-micro">−</button>
-                <span class="control-value">{{ workout.kg }}</span>
-                <button @click="increment(workout, 'kg')" class="btn-micro">+</button>
-              </div>
-
-              <div class="compact-stepper">
-                <span class="control-label">Sets</span>
-                <button @click="decrement(workout, 'sets')" class="btn-micro">−</button>
-                <span class="control-value">{{ workout.sets }}</span>
-                <button @click="increment(workout, 'sets')" class="btn-micro">+</button>
-              </div>
-
-              <div class="compact-stepper" v-if="!workout.isCardio && !workout.isSauna">
-                <span class="control-label">Reps</span>
-                <button @click="decrement(workout, 'reps')" class="btn-micro">−</button>
-                <span class="control-value">{{ workout.reps }}</span>
-                <button @click="increment(workout, 'reps')" class="btn-micro">+</button>
-              </div>
-            </div>
-
             <div v-if="!workout.collapsed" class="workout-controls">
               <div class="control-group compact" v-if="!workout.isSauna">
                 <label>kg</label>
@@ -1328,64 +1304,6 @@ body {
 }
 
 .btn-collapse:active {
-  transform: scale(0.95);
-}
-
-/* Compact Controls */
-.compact-controls {
-  display: flex;
-  gap: 0.5rem;
-  margin-top: 0.625rem;
-  padding-top: 0.625rem;
-  border-top: 1px solid var(--border);
-}
-
-.compact-stepper {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.25rem;
-  background: var(--bg-tertiary);
-  padding: 0.375rem 0.25rem;
-  border-radius: 8px;
-}
-
-.control-label {
-  font-size: 0.625rem;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  min-width: 24px;
-}
-
-.control-value {
-  font-size: 0.9375rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  min-width: 28px;
-  text-align: center;
-}
-
-.btn-micro {
-  width: 28px;
-  height: 28px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--accent);
-  font-size: 1rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.btn-micro:active {
-  background: var(--border);
   transform: scale(0.95);
 }
 
