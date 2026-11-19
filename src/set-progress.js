@@ -64,6 +64,11 @@ function isLight(hex) {
   return 0.299 * r + 0.587 * g + 0.114 * b > 160
 }
 
+export function badgeTextForBackground(hex) {
+  if (!hex) return COLORS.badgeTextNeutral
+  return isLight(hex) ? COLORS.badgeTextOnLight : COLORS.badgeTextOnDark
+}
+
 /**
  * Actual (Ist) sets vs target (Soll) → card/badge colors.
  * 0: neutral; below target: blues; == target: green; > target: orange; >= 4× target: red.
