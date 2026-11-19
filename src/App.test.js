@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import App from './App.vue'
-import { db } from './db/index.js'
+import { db, storage } from './db/index.js'
 
 vi.mock('./db/index.js', () => ({
   db: {
@@ -14,7 +14,8 @@ vi.mock('./db/index.js', () => ({
     getSessions: vi.fn(() => Promise.resolve([])),
     getMachineSettings: vi.fn(() => Promise.resolve({})),
     getEnabledEquipment: vi.fn(() => Promise.resolve([])),
-    putSession: vi.fn(() => Promise.resolve())
+    putSession: vi.fn(() => Promise.resolve()),
+    putMachineSetting: vi.fn(() => Promise.resolve())
   },
   migrateFromLocalStorage: vi.fn(() => Promise.resolve())
 }))
@@ -97,7 +98,7 @@ describe('machine card title line', () => {
     expect(line.find('.workout-metric').exists()).toBe(true)
     expect(line.find('.workout-sets-reps').exists()).toBe(true)
     expect(line.find('.workout-metric').text()).toBe('35 kg')
-    expect(line.find('.workout-sets-reps').text()).toBe('3×8')
+    expect(line.find('.workout-sets-reps').text()).toBe('2×8')
   })
 
   it('uses the same font-size for the kg value as the machine name, with slightly smaller sets×reps', async () => {
@@ -117,7 +118,7 @@ describe('machine card title line', () => {
     const expanded = cardByName(wrapper, 'Butterfly reverse')
     expect(expanded.classes()).not.toContain('collapsed')
     expect(expanded.find('.title-line .workout-metric').text()).toBe('35 kg')
-    expect(expanded.find('.title-line .workout-sets-reps').text()).toBe('3×8')
+    expect(expanded.find('.title-line .workout-sets-reps').text()).toBe('2×8')
   })
 
   it('opens the existing kg picker when the metric is tapped and does not expand the card', async () => {
@@ -131,6 +132,54 @@ describe('machine card title line', () => {
 
     expect(wrapper.find('.picker-overlay').exists()).toBe(true)
     expect(wrapper.find('.picker-title').text()).toBe('Kilogramm')
+    expect(cardByName(wrapper, 'Butterfly reverse').classes()).toContain('collapsed')
+  })
+
+
+  it('shows Soll-Sets × reps, not actual sets, behind the name', async () => {
+    const wrapper = await mountReady()
+    const card = cardByName(wrapper, 'Butterfly reverse')
+    expect(card.find('.workout-sets-reps').text()).toBe('2×8')
+    expect(card.find('.workout-nr').text()).toContain('19')
+  })
+
+  it('tapping the number badge increments actual sets, persists, and does not expand the card', async () => {
+    const wrapper = await mountReady()
+    const card = cardByName(wrapper, 'Butterfly reverse')
+    expect(card.classes()).toContain('collapsed')
+    const before = card.attributes('style') || ''
+
+    await card.find('.workout-nr').trigger('pointerdown')
+    await card.find('.workout-nr').trigger('pointerup')
+    await flushPromises()
+
+    const updated = cardByName(wrapper, 'Butterfly reverse')
+    expect(updated.classes()).toContain('collapsed')
+    expect(updated.find('.workout-sets-reps').text()).toBe('2×8')
+    expect(updated.attributes('style') || '').not.toBe(before)
+    expect(storage.putSession).toHaveBeenCalled()
+    const saved = storage.putSession.mock.calls.at(-1)[0]
+    const workout = saved.workouts.find((item) => item.name.trim() === 'Butterfly reverse')
+    expect(workout.sets).toBe(1)
+  })
+
+  it('long-pressing the number badge decrements actual sets', async () => {
+    vi.useFakeTimers()
+    const wrapper = await mountReady()
+    const card = cardByName(wrapper, 'Butterfly reverse')
+    await card.find('.workout-nr').trigger('pointerdown')
+    await card.find('.workout-nr').trigger('pointerup')
+    await flushPromises()
+    storage.putSession.mockClear()
+
+    await card.find('.workout-nr').trigger('pointerdown')
+    await vi.advanceTimersByTimeAsync(500)
+    await flushPromises()
+    vi.useRealTimers()
+
+    const saved = storage.putSession.mock.calls.at(-1)[0]
+    const workout = saved.workouts.find((item) => item.name.trim() === 'Butterfly reverse')
+    expect(workout?.sets ?? 0).toBe(0)
     expect(cardByName(wrapper, 'Butterfly reverse').classes()).toContain('collapsed')
   })
 

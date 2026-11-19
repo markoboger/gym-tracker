@@ -9,10 +9,16 @@ import {
   getPrimaryField,
   getPrimaryLabel,
   getPrimaryValue,
-  showSetsReps,
   initialMinutes,
   migrateSessionsUnits
 } from './workout-metric.js'
+import {
+  normalizeTargetSets,
+  nextTargetSets,
+  setProgressColors,
+  kgCounterColor,
+  countTargetHitDays
+} from './set-progress.js'
 
 const currentDate = ref(new Date().toISOString().split('T')[0])
 const workouts = ref([])
@@ -34,26 +40,50 @@ const editingMachine = ref(null)
 const machineSettings = ref({})
 
 // Get machine settings with defaults
-function getMachineSettings(equipmentId) {
-  if (!machineSettings.value[equipmentId]) {
-    return {
-      targetSets: 2,
-      stepSize: 5,
-      startingKg: equipmentData.find(eq => eq.id === equipmentId)?.defaultKg || 0,
-      countDirection: 'up'
-    }
+function defaultMachineSettings(equipmentId) {
+  return {
+    targetSets: 2,
+    stepSize: 5,
+    startingKg: equipmentData.find(eq => eq.id === equipmentId)?.defaultKg || 0,
+    countDirection: 'up'
   }
-  return machineSettings.value[equipmentId]
+}
+
+function getMachineSettings(equipmentId) {
+  const stored = machineSettings.value[equipmentId]
+  const base = stored ? { ...defaultMachineSettings(equipmentId), ...stored } : defaultMachineSettings(equipmentId)
+  return { ...base, targetSets: normalizeTargetSets(base.targetSets) }
+}
+
+function normalizedSettings(equipmentId, settings) {
+  return {
+    ...defaultMachineSettings(equipmentId),
+    ...settings,
+    targetSets: normalizeTargetSets(settings?.targetSets)
+  }
 }
 
 async function saveMachineSettings(equipmentId, settings) {
-  machineSettings.value[equipmentId] = settings
-  await storage.putMachineSetting(equipmentId, settings)
+  const normalized = normalizedSettings(equipmentId, settings)
+  machineSettings.value[equipmentId] = normalized
+  await storage.putMachineSetting(equipmentId, normalized)
 }
 
 async function loadMachineSettings() {
   const settings = await storage.getMachineSettings()
-  machineSettings.value = settings
+  const normalized = {}
+  const toPersist = []
+  for (const [id, value] of Object.entries(settings || {})) {
+    const next = normalizedSettings(id, value)
+    normalized[id] = next
+    if (normalizeTargetSets(value?.targetSets) !== value?.targetSets) {
+      toPersist.push([id, next])
+    }
+  }
+  machineSettings.value = normalized
+  for (const [id, next] of toPersist) {
+    await storage.putMachineSetting(id, next)
+  }
 }
 
 function openMachineSettings(workout) {
@@ -282,7 +312,7 @@ function initWorkouts(isNewDay = false) {
         name: eq.name,
         nr: eq.nr,
         kg: eq.unit === 'min' ? 0 : eq.defaultKg,
-        sets: isNewDay ? 0 : eq.sets,
+        sets: 0,
         reps: eq.reps,
         meters: eq.isCardio ? 0 : null,
         minutes: initialMinutes(eq),
@@ -304,7 +334,7 @@ function initWorkouts(isNewDay = false) {
       if (existing) {
         return { 
           ...existing, 
-          completed: true,
+          completed: existing.completed !== undefined ? existing.completed : true,
           collapsed: existing.collapsed !== undefined ? existing.collapsed : true
         }
       } else {
@@ -313,7 +343,7 @@ function initWorkouts(isNewDay = false) {
           name: eq.name,
           nr: eq.nr,
           kg: eq.unit === 'min' ? 0 : eq.defaultKg,
-          sets: eq.sets,
+          sets: 0,
           reps: eq.reps,
           meters: eq.isCardio ? 0 : null,
           minutes: initialMinutes(eq),
@@ -360,11 +390,20 @@ async function saveEnabledEquipment() {
   await storage.setEnabledEquipment(ids)
 }
 
+function sessionShouldPersist(workout) {
+  return !!(
+    workout.completed ||
+    (workout.sets || 0) > 0 ||
+    (workout.minutes || 0) > 0 ||
+    (workout.meters || 0) > 0
+  )
+}
+
 async function saveToday() {
   const existingIndex = sessions.value.findIndex(s => s.date === currentDate.value)
   const session = {
     date: currentDate.value,
-    workouts: workouts.value.filter(w => w.completed)
+    workouts: workouts.value.filter(sessionShouldPersist)
   }
   
   if (existingIndex >= 0) {
@@ -396,17 +435,30 @@ function enterEditMode(workout) {
   workout.collapsed = false
 }
 
+function recordKgIncreaseIfNeeded(workout, previous, next) {
+  if (workoutUnit(workout) === 'min') return
+  if (typeof previous === 'number' && typeof next === 'number' && next > previous) {
+    const current = getMachineSettings(workout.equipmentId)
+    saveMachineSettings(workout.equipmentId, {
+      ...current,
+      lastIncreaseDate: currentDate.value
+    })
+  }
+}
+
 function increment(workout, field) {
   if (field === 'kg') {
     const settings = getMachineSettings(workout.equipmentId)
     const step = settings.stepSize
+    const previous = workout.kg
     workout.kg = Math.round((workout.kg + step) * 10) / 10
+    recordKgIncreaseIfNeeded(workout, previous, workout.kg)
   } else if (field === 'minutes') {
     workout.minutes = Math.min(60, (workout.minutes || 0) + 1)
   } else {
     workout[field]++
   }
-  if (workout.completed) saveToday()
+  saveToday()
 }
 
 function decrement(workout, field) {
@@ -415,9 +467,87 @@ function decrement(workout, field) {
     const step = settings.stepSize
     workout.kg = Math.max(0, Math.round((workout.kg - step) * 10) / 10)
   } else {
-    workout[field] = Math.max(0, workout[field] - 1)
+    workout[field] = Math.max(0, (workout[field] || 0) - 1)
   }
-  if (workout.completed) saveToday()
+  saveToday()
+}
+
+function incrementActualSets(workout) {
+  workout.sets = (workout.sets || 0) + 1
+  saveToday()
+}
+
+function decrementActualSets(workout) {
+  workout.sets = Math.max(0, (workout.sets || 0) - 1)
+  saveToday()
+}
+
+const nrPress = ref({ id: null, timer: null, long: false })
+
+function clearNrPress() {
+  if (nrPress.value.timer) clearTimeout(nrPress.value.timer)
+  nrPress.value = { id: null, timer: null, long: false }
+}
+
+function startNrPress(workout, event) {
+  event?.stopPropagation?.()
+  clearNrPress()
+  nrPress.value = {
+    id: workout.equipmentId,
+    long: false,
+    timer: setTimeout(() => {
+      decrementActualSets(workout)
+      nrPress.value.long = true
+    }, 450)
+  }
+}
+
+function endNrPress(workout, event) {
+  event?.stopPropagation?.()
+  const wasLong = nrPress.value.long
+  const same = nrPress.value.id === workout.equipmentId
+  clearNrPress()
+  if (same && !wasLong) incrementActualSets(workout)
+}
+
+function cancelNrPress() {
+  clearNrPress()
+}
+
+function targetSetsFor(workout) {
+  return getMachineSettings(workout.equipmentId).targetSets
+}
+
+function showSollReps(workout) {
+  return !workout.isCardio && !workout.isSauna
+}
+
+function cardProgressStyle(workout) {
+  const colors = setProgressColors(workout.sets || 0, targetSetsFor(workout))
+  return {
+    background: colors.card,
+    borderColor: colors.border
+  }
+}
+
+function nrBadgeStyle(workout) {
+  const colors = setProgressColors(workout.sets || 0, targetSetsFor(workout))
+  return {
+    background: colors.badge,
+    color: colors.badgeText
+  }
+}
+
+function weightColor(workout) {
+  if (workoutUnit(workout) === 'min') return null
+  const settings = getMachineSettings(workout.equipmentId)
+  const count = countTargetHitDays({
+    sessions: sessions.value,
+    equipmentId: workout.equipmentId,
+    targetSets: settings.targetSets,
+    lastIncreaseDate: settings.lastIncreaseDate
+  })
+  return kgCounterColor(count)
 }
 
 function viewHistory() {
@@ -655,7 +785,11 @@ function closePicker() {
 
 function applyPickerValue() {
   if (pickerWorkout.value && pickerField.value) {
-    pickerWorkout.value[pickerField.value] = pickerValue.value
+    const workout = pickerWorkout.value
+    const field = pickerField.value
+    const previous = workout[field]
+    workout[field] = pickerValue.value
+    if (field === 'kg') recordKgIncreaseIfNeeded(workout, previous, pickerValue.value)
     saveToday()
   }
   closePicker()
@@ -744,9 +878,7 @@ onMounted(async () => {
             :key="workout.equipmentId"
             class="workout-card"
             :class="{ completed: workout.completed, collapsed: workout.collapsed }"
-            :style="workout.collapsed && workout.completed ? {
-              background: `linear-gradient(to right, rgba(52, 199, 89, 0.15) ${(workout.sets / getMachineSettings(workout.equipmentId).targetSets) * 100}%, var(--bg-secondary) ${(workout.sets / getMachineSettings(workout.equipmentId).targetSets) * 100}%)`
-            } : {}"
+            :style="cardProgressStyle(workout)"
           >
             <div 
               class="workout-header"
@@ -755,20 +887,30 @@ onMounted(async () => {
             >
               <div class="workout-title">
                 <div class="title-line">
-                  <span class="workout-nr" v-if="workout.nr">{{ workout.nr }}</span>
+                  <button
+                    type="button"
+                    class="workout-nr"
+                    :style="nrBadgeStyle(workout)"
+                    @click.stop
+                    @pointerdown.stop="startNrPress(workout, $event)"
+                    @pointerup.stop="endNrPress(workout, $event)"
+                    @pointercancel.stop="cancelNrPress"
+                    @contextmenu.prevent.stop
+                  >{{ workout.nr || '•' }}</button>
                   <span class="workout-name workout-title-size">{{ workout.name }}</span>
                   <button
                     v-if="showWorkoutMetric(workout)"
                     type="button"
                     class="workout-metric workout-title-size"
+                    :style="{ color: weightColor(workout) || undefined }"
                     @click.stop="openPicker(workout, primaryField(workout))"
                   >
                     {{ primaryValue(workout) }} {{ primaryLabel(workout) }}
                   </button>
                   <span
-                    v-if="showSetsReps(workout)"
+                    v-if="showSollReps(workout)"
                     class="workout-sets-reps"
-                  >{{ workout.sets }}×{{ workout.reps }}</span>
+                  >{{ targetSetsFor(workout) }}×{{ workout.reps }}</span>
                 </div>
               </div>
               <div class="header-actions">
@@ -1131,15 +1273,15 @@ onMounted(async () => {
             <label>Ziel-Sätze (Target Sets)</label>
             <div class="setting-control">
               <button 
-                @click="editingMachine.settings.targetSets = Math.max(2, editingMachine.settings.targetSets - 1)" 
+                @click="editingMachine.settings.targetSets = nextTargetSets(editingMachine.settings.targetSets, -1)" 
                 class="btn-stepper"
-                :disabled="editingMachine.settings.targetSets <= 2"
+                :disabled="normalizeTargetSets(editingMachine.settings.targetSets) <= 2"
               >−</button>
-              <span class="setting-value">{{ editingMachine.settings.targetSets }}</span>
+              <span class="setting-value">{{ normalizeTargetSets(editingMachine.settings.targetSets) }}</span>
               <button 
-                @click="editingMachine.settings.targetSets = Math.min(5, editingMachine.settings.targetSets + 1)" 
+                @click="editingMachine.settings.targetSets = nextTargetSets(editingMachine.settings.targetSets, 1)" 
                 class="btn-stepper"
-                :disabled="editingMachine.settings.targetSets >= 5"
+                :disabled="normalizeTargetSets(editingMachine.settings.targetSets) >= 5"
               >+</button>
             </div>
           </div>
@@ -1357,14 +1499,9 @@ body {
   transition: all 0.2s;
 }
 
-.workout-card.completed {
-  border-color: var(--success);
-  opacity: 0.8;
-}
-
 .workout-card.collapsed {
-  padding: 0.5rem 0.75rem;
-  min-height: 44px;
+  padding: 0.25rem 0.75rem;
+  min-height: 48px;
 }
 
 .workout-card.collapsed:active {
@@ -1410,14 +1547,25 @@ body {
 }
 
 .workout-nr {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 0.35rem;
+  border: none;
+  border-radius: 8px;
   background: var(--bg-tertiary);
-  padding: 0.125rem 0.4rem;
-  border-radius: 6px;
   font-size: 0.75rem;
+  font-weight: 600;
+  font-family: inherit;
   color: var(--text-secondary);
   flex-shrink: 0;
-  line-height: 1.3;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .workout-name,
