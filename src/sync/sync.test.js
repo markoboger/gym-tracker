@@ -63,6 +63,16 @@ describe('mapping Dexie <-> Firestore', () => {
     expect(machineFromRemote('7', { settings: { targetSets: 2 } }).equipmentId).toBe(7)
   })
 
+  it('syncs the per-machine kg step (stepSize + stepSizeManual)', async () => {
+    const record = { equipmentId: 12, targetSets: 2, stepSize: 8, stepSizeManual: true, lastIncreaseDate: '2026-11-19' }
+    const doc = machineToRemote(record, { updatedAt: 7 })
+    expect(doc.settings).toMatchObject({ stepSize: 8, stepSizeManual: true })
+    expect(machineFromRemote('12', doc)).toEqual(record)
+    // and end to end through Dexie
+    await applyRemoteChanges(db, 'machines', [{ id: '12', data: doc }])
+    expect(await storage.getMachineSetting(12)).toMatchObject({ stepSize: 8, stepSizeManual: true })
+  })
+
   it('maps enabled equipment and tombstones', () => {
     expect(configFromRemote(configToRemote([1, 2, 3], { updatedAt: 9 }))).toEqual([1, 2, 3])
     expect(tombstone('days', '2026-01-01', { updatedAt: 3 })).toMatchObject({ deleted: true, date: '2026-01-01', updatedAt: 3 })

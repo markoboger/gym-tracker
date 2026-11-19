@@ -147,20 +147,25 @@ describe('machine card title line', () => {
     expect(expanded.find('.title-line .workout-sets-reps').text()).toBe('2×8')
   })
 
-  it('opens the existing kg picker when the metric is tapped and does not expand the card', async () => {
+  it('opens the kg pop-up when the metric is tapped and does not expand the card', async () => {
     const wrapper = await mountReady()
     const card = cardByName(wrapper, 'Butterfly reverse')
     expect(card.classes()).toContain('collapsed')
-    expect(wrapper.find('.picker-overlay').exists()).toBe(false)
+    expect(wrapper.find('[data-test="kg-popup"]').exists()).toBe(false)
 
     await card.find('.workout-metric').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('.picker-overlay').exists()).toBe(true)
-    expect(wrapper.find('.picker-title').text()).toBe('Kilogramm')
+    expect(wrapper.find('[data-test="kg-popup"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="kg-value"]').text()).toContain('35')
     expect(cardByName(wrapper, 'Butterfly reverse').classes()).toContain('collapsed')
-  })
 
+    // the scroll picker stays reachable via "Liste"
+    await wrapper.find('[data-test="kg-popup-list"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="kg-popup"]').exists()).toBe(false)
+    expect(wrapper.find('.picker-title').text()).toBe('Kilogramm')
+  })
 
   it('shows Soll-Sets × reps, not actual sets, behind the name', async () => {
     const wrapper = await mountReady()
@@ -490,5 +495,84 @@ describe('date navigation and per-day state', () => {
     expect(wrapper.vm.currentDate).toBe(today)
     expect(wrapper.find('[data-test="date-label"]').text()).toBe(formatDateShort(today))
     expect(wrapper.find('[data-test="date-today"]').element.disabled).toBe(true)
+  })
+})
+
+
+function daysAgo(n) {
+  return shiftIsoDate(todayIso(), -n)
+}
+
+function abduktionHistory(values) {
+  return values.map((kg, i) => ({
+    date: daysAgo(values.length - i + 1),
+    workouts: [{ equipmentId: 12, kg, sets: 2, reps: 12, completed: true }]
+  }))
+}
+
+describe('kg pop-up', () => {
+  beforeEach(() => {
+    storage.getSessions.mockReset()
+    storage.getSessions.mockImplementation(() => Promise.resolve([]))
+    storage.putSession.mockClear()
+    storage.putMachineSetting.mockClear()
+  })
+
+  async function openPopup(name, sessions) {
+    if (sessions) storage.getSessions.mockResolvedValueOnce(sessions)
+    const wrapper = await mountReady()
+    await cardByName(wrapper, name).find('.workout-metric').trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('shows a green +Δ button with the step derived from history (Abduktion: 8 kg)', async () => {
+    const wrapper = await openPopup('Abduktion', abduktionHistory([77, 85, 93, 101]))
+    expect(wrapper.find('[data-test="kg-value"]').text()).toContain('101')
+    expect(wrapper.find('[data-test="kg-plus"]').text()).toBe('+8 kg')
+    expect(wrapper.find('[data-test="kg-minus"]').text()).toBe('−8')
+  })
+
+  it('+Δ raises kg and records the increase (kg counter reset), −Δ does not', async () => {
+    const wrapper = await openPopup('Butterfly reverse')
+    await wrapper.find('[data-test="kg-plus"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="kg-value"]').text()).toContain('40')
+    const saved = storage.putSession.mock.calls.at(-1)[0]
+    expect(saved.workouts.find(w => w.equipmentId === 3).kg).toBe(40)
+    const increase = storage.putMachineSetting.mock.calls.find(([id, s]) => id === 3 && s.lastIncreaseDate)
+    expect(increase[1].lastIncreaseDate).toBe(todayIso())
+
+    storage.putMachineSetting.mockClear()
+    await wrapper.find('[data-test="kg-minus"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="kg-value"]').text()).toContain('35')
+    expect(storage.putMachineSetting).not.toHaveBeenCalled()
+  })
+
+  it('manual Δ is persisted per machine and wins over the derived step', async () => {
+    const wrapper = await openPopup('Abduktion', abduktionHistory([77, 85, 93, 101]))
+    await wrapper.find('[data-test="kg-step-plus"]').trigger('click')
+    await flushPromises()
+    const [id, settings] = storage.putMachineSetting.mock.calls.at(-1)
+    expect(id).toBe(12)
+    expect(settings).toMatchObject({ stepSize: 9, stepSizeManual: true })
+    expect(wrapper.find('[data-test="kg-plus"]').text()).toBe('+9 kg')
+    expect(wrapper.find('[data-test="kg-step-auto"]').text()).toBe('Auto (8)')
+
+    await wrapper.find('[data-test="kg-step-auto"]').trigger('click')
+    await flushPromises()
+    expect(storage.putMachineSetting.mock.calls.at(-1)[1]).toMatchObject({ stepSize: 8, stepSizeManual: false })
+    expect(wrapper.find('[data-test="kg-plus"]').text()).toBe('+8 kg')
+  })
+
+  it('keeps sets editing in the pop-up', async () => {
+    const wrapper = await openPopup('Butterfly reverse')
+    await wrapper.find('[data-test="kg-popup-sets-plus"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="kg-popup-sets"]').text()).toBe('1')
+    await wrapper.find('[data-test="kg-popup-done"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="kg-popup"]').exists()).toBe(false)
   })
 })

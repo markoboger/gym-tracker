@@ -6,6 +6,8 @@ import equipmentData from './data/equipment.json'
 import { storage, migrateFromLocalStorage } from './db/index.js'
 import { initSync } from './sync/index.js'
 import SyncStatus from './components/SyncStatus.vue'
+import KgStepPopup from './components/KgStepPopup.vue'
+import { effectiveKgStep, fallbackKgStep, nextKgStep, applyKgDelta } from './kg-step.js'
 import {
   getWorkoutUnit,
   getPrimaryField,
@@ -104,10 +106,25 @@ async function loadMachineSettings() {
   }
 }
 
+// Weight step (Δ) for a machine: manual > derived from history > fallback (see kg-step.js)
+function kgStepInfo(workout) {
+  return effectiveKgStep(
+    getMachineSettings(workout.equipmentId),
+    sessions.value,
+    workout.equipmentId,
+    fallbackKgStep(workout.kg)
+  )
+}
+
 function openMachineSettings(workout) {
+  const stepInfo = kgStepInfo(workout)
   editingMachine.value = {
     ...workout,
-    settings: { ...getMachineSettings(workout.equipmentId) }
+    settings: {
+      ...getMachineSettings(workout.equipmentId),
+      stepSize: stepInfo.step,
+      stepSizeManual: stepInfo.manual
+    }
   }
   showMachineSettings.value = true
 }
@@ -322,7 +339,8 @@ function buildWorkoutForDay(eq, existing, { resetIst = false } = {}) {
     unit: eq.unit || 'kg',
     targetSets,
     completed: stored?.completed !== undefined ? stored.completed : false,
-    collapsed: stored?.collapsed !== undefined ? stored.collapsed : true
+    collapsed: stored?.collapsed !== undefined ? stored.collapsed : true,
+    ...(stored?.kgEdited ? { kgEdited: true } : {})
   }
 }
 
@@ -364,7 +382,8 @@ function sessionShouldPersist(workout) {
     (workout.sets || 0) > 0 ||
     (workout.minutes || 0) > 0 ||
     (workout.meters || 0) > 0 ||
-    workout.sollEdited
+    workout.sollEdited ||
+    workout.kgEdited // kg changed without sets yet: keep it (not a training day by itself)
   )
 }
 
@@ -417,10 +436,10 @@ function recordKgIncreaseIfNeeded(workout, previous, next) {
 
 function increment(workout, field) {
   if (field === 'kg') {
-    const settings = getMachineSettings(workout.equipmentId)
-    const step = settings.stepSize
+    const step = kgStepInfo(workout).step
     const previous = workout.kg
-    workout.kg = Math.round((workout.kg + step) * 10) / 10
+    workout.kg = applyKgDelta(workout.kg, step)
+    workout.kgEdited = true
     recordKgIncreaseIfNeeded(workout, previous, workout.kg)
   } else if (field === 'minutes') {
     workout.minutes = Math.min(60, (workout.minutes || 0) + 1)
@@ -432,9 +451,8 @@ function increment(workout, field) {
 
 function decrement(workout, field) {
   if (field === 'kg') {
-    const settings = getMachineSettings(workout.equipmentId)
-    const step = settings.stepSize
-    workout.kg = Math.max(0, Math.round((workout.kg - step) * 10) / 10)
+    workout.kg = applyKgDelta(workout.kg, -kgStepInfo(workout).step)
+    workout.kgEdited = true
   } else {
     workout[field] = Math.max(0, (workout[field] || 0) - 1)
   }
@@ -825,6 +843,66 @@ function createNewDay() {
   initWorkouts(true)
 }
 
+// kg pop-up (tap on the kg badge)
+const kgPopupWorkout = ref(null)
+const kgPopupStep = computed(() => (kgPopupWorkout.value ? kgStepInfo(kgPopupWorkout.value) : null))
+
+function openMetric(workout) {
+  if (primaryField(workout) === 'kg') {
+    kgPopupWorkout.value = workout
+  } else {
+    openPicker(workout, primaryField(workout))
+  }
+}
+
+function closeKgPopup() {
+  kgPopupWorkout.value = null
+}
+
+function adjustKg(workout, delta) {
+  const previous = workout.kg
+  workout.kg = applyKgDelta(workout.kg, delta)
+  workout.kgEdited = true
+  // only increases reset the kg counter (lastIncreaseDate), decreases don't
+  recordKgIncreaseIfNeeded(workout, previous, workout.kg)
+  saveToday()
+}
+
+function changeKgStep(workout, direction) {
+  const next = nextKgStep(kgStepInfo(workout).step, direction)
+  saveMachineSettings(workout.equipmentId, {
+    ...getMachineSettings(workout.equipmentId),
+    stepSize: next,
+    stepSizeManual: true
+  })
+}
+
+function resetKgStep(workout) {
+  const current = getMachineSettings(workout.equipmentId)
+  const info = effectiveKgStep({ ...current, stepSizeManual: false }, sessions.value, workout.equipmentId, fallbackKgStep(workout.kg))
+  saveMachineSettings(workout.equipmentId, { ...current, stepSize: info.step, stepSizeManual: false })
+}
+
+function kgPopupTargetSets(workout, direction) {
+  if (direction > 0) incrementTargetSets(workout)
+  else decrementTargetSets(workout)
+}
+
+function kgPopupSets(workout, direction) {
+  if (direction > 0) incrementActualSets(workout)
+  else decrementActualSets(workout)
+}
+
+function kgPopupReps(workout, direction) {
+  if (direction > 0) increment(workout, 'reps')
+  else decrement(workout, 'reps')
+}
+
+function kgPopupOpenList(workout) {
+  closeKgPopup()
+  openPicker(workout, 'kg')
+}
+
 function openPicker(workout, field) {
   pickerWorkout.value = workout
   pickerField.value = field
@@ -847,7 +925,10 @@ function applyPickerValue() {
     } else {
       const previous = workout[field]
       workout[field] = pickerValue.value
-      if (field === 'kg') recordKgIncreaseIfNeeded(workout, previous, pickerValue.value)
+      if (field === 'kg') {
+        workout.kgEdited = true
+        recordKgIncreaseIfNeeded(workout, previous, pickerValue.value)
+      }
       saveToday()
     }
   }
@@ -858,11 +939,16 @@ function getPickerRange(field) {
   if (field === 'kg' && pickerWorkout.value) {
     // Use machine-specific step size
     const settings = getMachineSettings(pickerWorkout.value.equipmentId)
-    const step = settings.stepSize
+    const step = kgStepInfo(pickerWorkout.value).step
     const values = []
     for (let i = 0; i <= 200; i += step) {
       const val = Math.round(i * 10) / 10
       values.push({ name: `${val} kg`, value: val })
+    }
+    const currentKg = pickerWorkout.value.kg
+    if (typeof currentKg === 'number' && !values.some(v => v.value === currentKg)) {
+      values.push({ name: `${currentKg} kg`, value: currentKg })
+      values.sort((a, b) => a.value - b.value)
     }
     // Reverse order for count-down machines (lower is better)
     if (settings.countDirection === 'down') {
@@ -1053,7 +1139,7 @@ onMounted(async () => {
                     class="workout-metric workout-title-size"
                     :class="{ 'is-compact': metricIsCompact(workout) }"
                     :style="metricBadgeStyle(workout)"
-                    @click.stop="openPicker(workout, primaryField(workout))"
+                    @click.stop="openMetric(workout)"
                   >
                     <span class="metric-number">{{ primaryValue(workout) }}</span>
                     <span v-if="primaryLabel(workout) === 'min'" class="metric-unit">min</span>
@@ -1413,6 +1499,23 @@ onMounted(async () => {
       </div>
     </div>
 
+    <KgStepPopup
+      v-if="kgPopupWorkout && kgPopupStep"
+      :workout="kgPopupWorkout"
+      :step="kgPopupStep.step"
+      :derived-step="kgPopupStep.derived"
+      :manual="kgPopupStep.manual"
+      :target-sets="targetSetsFor(kgPopupWorkout)"
+      @adjust="adjustKg(kgPopupWorkout, $event)"
+      @step="changeKgStep(kgPopupWorkout, $event)"
+      @reset-step="resetKgStep(kgPopupWorkout)"
+      @target-sets="kgPopupTargetSets(kgPopupWorkout, $event)"
+      @sets="kgPopupSets(kgPopupWorkout, $event)"
+      @reps="kgPopupReps(kgPopupWorkout, $event)"
+      @open-list="kgPopupOpenList(kgPopupWorkout)"
+      @close="closeKgPopup"
+    />
+
     <!-- Number Picker Modal (vue-scroll-picker) -->
     <div v-if="showPicker" class="picker-overlay" @click="closePicker">
       <div class="picker-modal" @click.stop>
@@ -1460,12 +1563,12 @@ onMounted(async () => {
             <label>Gewichts-Schritte (Step Size)</label>
             <div class="setting-control">
               <button 
-                @click="editingMachine.settings.stepSize = Math.max(1, editingMachine.settings.stepSize - 0.5)" 
+                @click="editingMachine.settings.stepSize = Math.max(0.5, editingMachine.settings.stepSize - 0.5); editingMachine.settings.stepSizeManual = true" 
                 class="btn-stepper"
               >−</button>
               <span class="setting-value">{{ editingMachine.settings.stepSize }} kg</span>
               <button 
-                @click="editingMachine.settings.stepSize = Math.min(10, editingMachine.settings.stepSize + 0.5)" 
+                @click="editingMachine.settings.stepSize = Math.min(20, editingMachine.settings.stepSize + 0.5); editingMachine.settings.stepSizeManual = true" 
                 class="btn-stepper"
               >+</button>
             </div>
