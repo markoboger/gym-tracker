@@ -26,3 +26,4 @@ dist-ssr
 # Local Firebase config
 .env
 .firebase
+dev-dist
