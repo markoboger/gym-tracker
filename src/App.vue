@@ -4,6 +4,8 @@ import { VueScrollPicker } from 'vue-scroll-picker'
 import 'vue-scroll-picker/style.css'
 import equipmentData from './data/equipment.json'
 import { storage, migrateFromLocalStorage } from './db/index.js'
+import { initSync } from './sync/index.js'
+import SyncStatus from './components/SyncStatus.vue'
 import {
   getWorkoutUnit,
   getPrimaryField,
@@ -881,12 +883,21 @@ function handlePickerChange(newValue) {
   pickerValue.value = newValue
 }
 
+// Cloud sync merged remote changes into Dexie: reload the in-memory state
+async function reloadFromStorage() {
+  await loadEnabledEquipment()
+  await loadMachineSettings()
+  await loadSessions()
+  initWorkouts()
+}
+
 onMounted(async () => {
   await migrateFromLocalStorage()
   await loadEnabledEquipment()
   await loadMachineSettings()
   await loadSessions()
   initWorkouts()
+  initSync({ onRemoteChange: reloadFromStorage })
 })
 </script>
 
@@ -1353,6 +1364,7 @@ onMounted(async () => {
         </div>
         
         <div class="modal-body">
+          <SyncStatus />
           <div class="config-actions">
             <button @click="enableAll" class="btn-secondary btn-small">Alle aktivieren</button>
             <button @click="disableAll" class="btn-secondary btn-small">Alle deaktivieren</button>

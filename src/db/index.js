@@ -19,6 +19,45 @@ db.version(1).stores({
   metadata: 'key'
 })
 
+// v2: sync bookkeeping for the optional Firebase sync (see src/sync/).
+// One row per synced document: key = `${kind}/${id}` (kind: days | machines | config),
+// updatedAt = last-write-wins clock (ms), dirty = 1 while the change still has to be
+// uploaded (doubles as a durable offline outbox), deleted = tombstone flag.
+// Records in the other tables stay untouched, so the UI keeps reading plain Dexie data.
+db.version(2).stores({
+  sessions: 'date',
+  machineSettings: 'equipmentId',
+  enabledEquipment: '++id',
+  metadata: 'key',
+  syncMeta: 'key, dirty'
+})
+
+const localChangeListeners = new Set()
+
+/** Subscribe to local writes made through `storage` (used by the sync engine). */
+export function onLocalChange(listener) {
+  localChangeListeners.add(listener)
+  return () => localChangeListeners.delete(listener)
+}
+
+function notifyLocalChange() {
+  for (const listener of localChangeListeners) {
+    try { listener() } catch (err) { console.error('[HappyFit] change listener failed', err) }
+  }
+}
+
+/**
+ * Mark a document as locally changed. updatedAt is monotonic per key so a new local edit
+ * always wins over whatever version this device has seen before (protects against clock skew).
+ * Must run inside a transaction that includes db.syncMeta.
+ */
+export async function touchSyncMeta(kind, id, { deleted = false, now = Date.now() } = {}) {
+  const key = `${kind}/${id}`
+  const previous = await db.syncMeta.get(key)
+  const updatedAt = Math.max(now, (previous?.updatedAt || 0) + 1)
+  await db.syncMeta.put({ key, kind, id: String(id), updatedAt, dirty: 1, deleted })
+}
+
 // Migration flag
 const MIGRATION_KEY = 'migrated_from_localstorage'
 
@@ -92,11 +131,23 @@ export const storage = {
   },
 
   async putSession(session) {
-    await db.sessions.put(session)
+    await db.transaction('rw', db.sessions, db.syncMeta, async () => {
+      await db.sessions.put(session)
+      await touchSyncMeta('days', session.date)
+    })
+    notifyLocalChange()
   },
 
   async deleteSessions() {
-    await db.sessions.clear()
+    await db.transaction('rw', db.sessions, db.syncMeta, async () => {
+      const dates = await db.sessions.toCollection().primaryKeys()
+      await db.sessions.clear()
+      // Tombstones so the deletion also reaches the cloud and other devices
+      for (const date of dates) {
+        await touchSyncMeta('days', date, { deleted: true })
+      }
+    })
+    notifyLocalChange()
   },
 
   async getMachineSettings() {
@@ -115,7 +166,11 @@ export const storage = {
   },
 
   async putMachineSetting(equipmentId, settings) {
-    await db.machineSettings.put({ equipmentId, ...settings })
+    await db.transaction('rw', db.machineSettings, db.syncMeta, async () => {
+      await db.machineSettings.put({ equipmentId, ...settings })
+      await touchSyncMeta('machines', equipmentId)
+    })
+    notifyLocalChange()
   },
 
   async getEnabledEquipment() {
@@ -124,8 +179,12 @@ export const storage = {
   },
 
   async setEnabledEquipment(equipmentIds) {
-    await db.enabledEquipment.clear()
-    const records = equipmentIds.map(equipmentId => ({ equipmentId }))
-    await db.enabledEquipment.bulkAdd(records)
+    await db.transaction('rw', db.enabledEquipment, db.syncMeta, async () => {
+      await db.enabledEquipment.clear()
+      const records = equipmentIds.map(equipmentId => ({ equipmentId }))
+      await db.enabledEquipment.bulkAdd(records)
+      await touchSyncMeta('config', 'enabledEquipment')
+    })
+    notifyLocalChange()
   }
 }
