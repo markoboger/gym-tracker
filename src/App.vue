@@ -4,6 +4,15 @@ import { VueScrollPicker } from 'vue-scroll-picker'
 import 'vue-scroll-picker/style.css'
 import equipmentData from './data/equipment.json'
 import { storage, migrateFromLocalStorage } from './db/index.js'
+import {
+  getWorkoutUnit,
+  getPrimaryField,
+  getPrimaryLabel,
+  getPrimaryValue,
+  showSetsReps,
+  initialMinutes,
+  migrateSessionsUnits
+} from './workout-metric.js'
 
 const currentDate = ref(new Date().toISOString().split('T')[0])
 const workouts = ref([])
@@ -127,7 +136,7 @@ const availableExercises = computed(() => {
   filteredSessions.value.forEach(session => {
     session.workouts.forEach(workout => {
       // Only include enabled equipment
-      if (!workout.isSauna && workout.kg > 0 && enabledEquipment.value.has(workout.equipmentId)) {
+      if (workoutHasChartData(workout)) {
         if (!exerciseMap.has(workout.equipmentId)) {
           exerciseMap.set(workout.equipmentId, {
             id: workout.equipmentId,
@@ -151,12 +160,14 @@ const chartData = computed(() => {
   
   chronologicalSessions.forEach(session => {
     const workout = session.workouts.find(w => w.equipmentId === selectedExerciseId.value)
-    if (workout && !workout.isSauna && workout.kg > 0) {
+    if (workout && workoutHasChartData(workout)) {
+      const unit = getWorkoutUnit(workout, equipmentData)
       data.push({
         date: session.date,
-        kg: workout.kg,
+        kg: unit === 'min' ? (workout.minutes || 0) : workout.kg,
         sets: workout.sets,
-        reps: workout.reps
+        reps: workout.reps,
+        unit
       })
     }
   })
@@ -182,6 +193,11 @@ const selectedExerciseName = computed(() => {
   return exercise ? exercise.name : ''
 })
 
+const selectedExerciseUnitLabel = computed(() => {
+  const equipment = equipmentData.find(e => e.id === selectedExerciseId.value)
+  return equipment?.unit === 'min' ? 'min' : 'kg'
+})
+
 function getMostRecentWorkoutData(equipmentId) {
   // Sort sessions chronologically, most recent first
   const sortedSessions = [...sessions.value].sort((a, b) => 
@@ -197,6 +213,35 @@ function getMostRecentWorkoutData(equipmentId) {
   }
   
   return null
+}
+
+function workoutUnit(workout) {
+  return getWorkoutUnit(workout, equipmentData)
+}
+
+function primaryField(workout) {
+  return getPrimaryField(workoutUnit(workout))
+}
+
+function primaryLabel(workout) {
+  return getPrimaryLabel(workoutUnit(workout))
+}
+
+function primaryValue(workout) {
+  return getPrimaryValue(workout, equipmentData)
+}
+
+function workoutHasChartData(workout) {
+  if (workout.isSauna) return false
+  if (!enabledEquipment.value.has(workout.equipmentId)) return false
+  if (workoutUnit(workout) === 'min') {
+    return (workout.minutes || 0) > 0 || (workout.meters || 0) > 0
+  }
+  return workout.kg > 0
+}
+
+function showWorkoutMetric(workout) {
+  return !workout.isSauna
 }
 
 function initWorkouts(isNewDay = false) {
@@ -221,9 +266,10 @@ function initWorkouts(isNewDay = false) {
             sets: 0,
             reps: recentWorkout.reps,
             meters: eq.isCardio ? (recentWorkout.meters || 0) : null,
-            minutes: (eq.isCardio || eq.isSauna) ? (recentWorkout.minutes || 0) : null,
+            minutes: initialMinutes(eq, recentWorkout),
             isCardio: eq.isCardio,
             isSauna: eq.isSauna,
+            unit: eq.unit || 'kg',
             completed: false,
             collapsed: true
           }
@@ -235,13 +281,14 @@ function initWorkouts(isNewDay = false) {
         equipmentId: eq.id,
         name: eq.name,
         nr: eq.nr,
-        kg: eq.defaultKg,
+        kg: eq.unit === 'min' ? 0 : eq.defaultKg,
         sets: isNewDay ? 0 : eq.sets,
         reps: eq.reps,
         meters: eq.isCardio ? 0 : null,
-        minutes: (eq.isCardio || eq.isSauna) ? 0 : null,
+        minutes: initialMinutes(eq),
         isCardio: eq.isCardio,
         isSauna: eq.isSauna,
+        unit: eq.unit || 'kg',
         completed: false,
         collapsed: true
       }
@@ -265,13 +312,14 @@ function initWorkouts(isNewDay = false) {
           equipmentId: eq.id,
           name: eq.name,
           nr: eq.nr,
-          kg: eq.defaultKg,
+          kg: eq.unit === 'min' ? 0 : eq.defaultKg,
           sets: eq.sets,
           reps: eq.reps,
           meters: eq.isCardio ? 0 : null,
-          minutes: (eq.isCardio || eq.isSauna) ? 0 : null,
+          minutes: initialMinutes(eq),
           isCardio: eq.isCardio,
           isSauna: eq.isSauna,
+          unit: eq.unit || 'kg',
           completed: false,
           collapsed: true
         }
@@ -282,7 +330,13 @@ function initWorkouts(isNewDay = false) {
 
 async function loadSessions() {
   const loadedSessions = await storage.getSessions()
-  sessions.value = loadedSessions
+  const sessionsList = Array.isArray(loadedSessions) ? loadedSessions : []
+  if (migrateSessionsUnits(sessionsList, equipmentData)) {
+    for (const session of sessionsList) {
+      await storage.putSession(session)
+    }
+  }
+  sessions.value = sessionsList
 }
 
 async function saveSessions() {
@@ -347,6 +401,8 @@ function increment(workout, field) {
     const settings = getMachineSettings(workout.equipmentId)
     const step = settings.stepSize
     workout.kg = Math.round((workout.kg + step) * 10) / 10
+  } else if (field === 'minutes') {
+    workout.minutes = Math.min(60, (workout.minutes || 0) + 1)
   } else {
     workout[field]++
   }
@@ -587,7 +643,7 @@ function createNewDay() {
 function openPicker(workout, field) {
   pickerWorkout.value = workout
   pickerField.value = field
-  pickerValue.value = workout[field]
+  pickerValue.value = workout[field] ?? 0
   showPicker.value = true
 }
 
@@ -629,6 +685,11 @@ function getPickerRange(field) {
     return Array.from({ length: 51 }, (_, i) => ({ 
       name: `${i}`, 
       value: i 
+    }))
+  } else if (field === 'minutes') {
+    return Array.from({ length: 61 }, (_, i) => ({
+      name: `${i} min`,
+      value: i
     }))
   }
   return []
@@ -695,13 +756,20 @@ onMounted(async () => {
               <div class="workout-title">
                 <div class="title-line">
                   <span class="workout-nr" v-if="workout.nr">{{ workout.nr }}</span>
-                  <span class="workout-name">{{ workout.name }}</span>
+                  <span class="workout-name workout-title-size">{{ workout.name }}</span>
+                  <button
+                    v-if="showWorkoutMetric(workout)"
+                    type="button"
+                    class="workout-metric workout-title-size"
+                    @click.stop="openPicker(workout, primaryField(workout))"
+                  >
+                    {{ primaryValue(workout) }} {{ primaryLabel(workout) }}
+                  </button>
+                  <span
+                    v-if="showSetsReps(workout)"
+                    class="workout-sets-reps"
+                  >{{ workout.sets }}×{{ workout.reps }}</span>
                 </div>
-                <span v-if="workout.collapsed" class="workout-summary">
-                  {{ workout.kg > 0 ? workout.kg + 'kg' : '' }}
-                  {{ workout.sets > 0 ? ' · ' + workout.sets + '×' + workout.reps : '' }}
-                  {{ workout.completed ? ` · ${workout.sets}/${getMachineSettings(workout.equipmentId).targetSets}` : '' }}
-                </span>
               </div>
               <div class="header-actions">
                 <button 
@@ -731,7 +799,7 @@ onMounted(async () => {
             </div>
 
             <div v-if="!workout.collapsed" class="workout-controls">
-              <div class="control-group compact" v-if="!workout.isSauna">
+              <div class="control-group compact" v-if="!workout.isSauna && workoutUnit(workout) !== 'min'">
                 <label>kg</label>
                 <button @click="decrement(workout, 'kg')" class="btn-stepper-mini">−</button>
                 <button 
@@ -741,6 +809,18 @@ onMounted(async () => {
                   {{ workout.kg }}
                 </button>
                 <button @click="increment(workout, 'kg')" class="btn-stepper-mini">+</button>
+              </div>
+
+              <div class="control-group compact" v-if="workoutUnit(workout) === 'min'">
+                <label>min</label>
+                <button @click="decrement(workout, 'minutes')" class="btn-stepper-mini">−</button>
+                <button 
+                  @click="openPicker(workout, 'minutes')"
+                  class="picker-trigger"
+                >
+                  {{ workout.minutes || 0 }}
+                </button>
+                <button @click="increment(workout, 'minutes')" class="btn-stepper-mini">+</button>
               </div>
 
               <div class="control-group compact">
@@ -767,7 +847,7 @@ onMounted(async () => {
                 <button @click="increment(workout, 'reps')" class="btn-stepper-mini">+</button>
               </div>
 
-              <div class="control-group" v-if="workout.isCardio || workout.isSauna">
+              <div class="control-group" v-if="(workout.isCardio || workout.isSauna) && workoutUnit(workout) !== 'min'">
                 <label>Min</label>
                 <div class="stepper">
                   <button @click="decrement(workout, 'minutes')" class="btn-stepper">−</button>
@@ -890,20 +970,20 @@ onMounted(async () => {
             <div class="chart-stats">
               <div class="stat">
                 <span class="stat-label">Min</span>
-                <span class="stat-value">{{ chartStats.min }} kg</span>
+                <span class="stat-value">{{ chartStats.min }} {{ selectedExerciseUnitLabel }}</span>
               </div>
               <div class="stat">
                 <span class="stat-label">Max</span>
-                <span class="stat-value">{{ chartStats.max }} kg</span>
+                <span class="stat-value">{{ chartStats.max }} {{ selectedExerciseUnitLabel }}</span>
               </div>
               <div class="stat">
                 <span class="stat-label">Aktuell</span>
-                <span class="stat-value">{{ chartStats.latest }} kg</span>
+                <span class="stat-value">{{ chartStats.latest }} {{ selectedExerciseUnitLabel }}</span>
               </div>
               <div class="stat">
                 <span class="stat-label">Änderung</span>
                 <span class="stat-value" :class="{ positive: chartStats.change > 0, negative: chartStats.change < 0 }">
-                  {{ chartStats.change > 0 ? '+' : '' }}{{ chartStats.change }} kg
+                  {{ chartStats.change > 0 ? '+' : '' }}{{ chartStats.change }} {{ selectedExerciseUnitLabel }}
                 </span>
               </div>
             </div>
@@ -1026,7 +1106,7 @@ onMounted(async () => {
       <div class="picker-modal" @click.stop>
         <div class="picker-header">
           <button @click="closePicker" class="picker-cancel">Abbrechen</button>
-          <span class="picker-title">{{ pickerField === 'kg' ? 'Kilogramm' : pickerField === 'sets' ? 'Sets' : 'Reps' }}</span>
+          <span class="picker-title">{{ pickerField === 'kg' ? 'Kilogramm' : pickerField === 'minutes' ? 'Minuten' : pickerField === 'sets' ? 'Sets' : 'Reps' }}</span>
           <button @click="applyPickerValue" class="picker-done">Fertig</button>
         </div>
         <div class="picker-wheel-container">
@@ -1213,13 +1293,13 @@ body {
 }
 
 .main {
-  padding: 1rem;
+  padding: 0.75rem;
   max-width: 600px;
   margin: 0 auto;
 }
 
 .date-header {
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
 }
 
 .date-header-top {
@@ -1266,13 +1346,13 @@ body {
 .workouts-list {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.375rem;
 }
 
 .workout-card {
   background: var(--bg-secondary);
-  border-radius: 12px;
-  padding: 1rem;
+  border-radius: 10px;
+  padding: 0.75rem;
   border: 2px solid transparent;
   transition: all 0.2s;
 }
@@ -1283,7 +1363,8 @@ body {
 }
 
 .workout-card.collapsed {
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 0.75rem;
+  min-height: 44px;
 }
 
 .workout-card.collapsed:active {
@@ -1293,8 +1374,9 @@ body {
 .workout-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   margin-bottom: 0.75rem;
+  min-width: 0;
 }
 
 .workout-header.clickable {
@@ -1308,15 +1390,17 @@ body {
 
 .workout-title {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
 }
 
 .title-line {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 0.5rem;
+  min-width: 0;
+  width: 100%;
 }
 
 .header-actions {
@@ -1328,23 +1412,50 @@ body {
 .workout-nr {
   display: inline-block;
   background: var(--bg-tertiary);
-  padding: 0.25rem 0.5rem;
+  padding: 0.125rem 0.4rem;
   border-radius: 6px;
   font-size: 0.75rem;
-  margin-right: 0.5rem;
   color: var(--text-secondary);
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+
+.workout-name,
+.workout-metric,
+.workout-title-size {
+  font-size: 1.125rem;
+  font-weight: 500;
+  line-height: 1.3;
 }
 
 .workout-name {
-  font-size: 1.125rem;
-  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
 
-.workout-summary {
-  font-size: 0.8125rem;
+.workout-metric {
+  flex-shrink: 0;
+  white-space: nowrap;
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  font-family: inherit;
+  padding: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.workout-sets-reps {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1.3;
   color: var(--text-secondary);
-  font-weight: 400;
-  margin-top: 0.125rem;
 }
 
 .workout-controls {
