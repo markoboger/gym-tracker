@@ -53,6 +53,8 @@ describe('App Integration', () => {
     expect(wrapper.find('[data-test="date-current"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="date-prev"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="date-next"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="date-today"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="date-today"]').text()).toBe('Heute')
     expect(wrapper.find('input[type="date"]').exists()).toBe(false)
   })
 
@@ -240,6 +242,7 @@ describe('machine card layout v14', () => {
     expect(card.find('.workout-metric').text()).toBe('35 kg')
     expect(card.find('.workout-sets-reps').text()).toBe('2×8')
     expect(getComputedStyle(card.find('.workout-metric').element).textAlign).toBe('right')
+    expect(card.find('.workout-name').text()).toBe('Butterfly reverse')
   })
 
   it('uses the same title font on the number badge as on the name and kg', async () => {
@@ -452,5 +455,28 @@ describe('date navigation and per-day state', () => {
     const saved = storage.putSession.mock.calls.at(-1)[0]
     expect(saved.date).toBe(past)
     expect(saved.workouts.find((item) => item.equipmentId === 3).sets).toBe(2)
+  })
+
+  it('jumps back to today with the Heute button and disables it on today', async () => {
+    const today = todayIso()
+    const past = shiftIsoDate(today, -3)
+    storage.getSessions.mockResolvedValue([
+      { date: past, workouts: [{ equipmentId: 3, name: 'Butterfly reverse', kg: 30, sets: 2, reps: 8 }] }
+    ])
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-test="date-today"]').text()).toBe('Heute')
+    expect(wrapper.find('[data-test="date-today"]').element.disabled).toBe(true)
+    expect(wrapper.vm.currentDate).toBe(today)
+
+    await wrapper.find('[data-test="date-prev"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.currentDate).toBe(past)
+    expect(wrapper.find('[data-test="date-today"]').element.disabled).toBe(false)
+
+    await wrapper.find('[data-test="date-today"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.currentDate).toBe(today)
+    expect(wrapper.find('[data-test="date-label"]').text()).toBe(formatDateShort(today))
+    expect(wrapper.find('[data-test="date-today"]').element.disabled).toBe(true)
   })
 })

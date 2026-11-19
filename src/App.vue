@@ -517,6 +517,13 @@ function shiftCalendarMonth(delta) {
   calendarCursor.value = shiftMonth(calendarCursor.value.year, calendarCursor.value.month, delta)
 }
 
+function goToToday() {
+  if (isViewingToday.value) return
+  currentDate.value = todayIso()
+  showCalendar.value = false
+  initWorkouts()
+}
+
 function selectCalendarDay(iso) {
   if (!iso || iso > todayIso()) return
   currentDate.value = iso
@@ -936,6 +943,14 @@ onMounted(async () => {
               :disabled="!canGoNext"
               @click="shiftDay(1)"
             >+</button>
+            <button
+              type="button"
+              class="date-nav-btn date-nav-today"
+              data-test="date-today"
+              aria-label="Heute"
+              :disabled="isViewingToday"
+              @click="goToToday"
+            >Heute</button>
           </div>
           <div v-if="showCalendar" class="calendar-overlay" data-test="calendar-overlay" @click="closeCalendar">
             <div class="calendar" data-test="training-calendar" @click.stop>
@@ -1672,6 +1687,16 @@ body {
   white-space: nowrap;
 }
 
+.date-nav-today {
+  flex: 0 0 auto;
+  height: 36px;
+  min-width: 36px;
+  padding: 0 0.7rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
 .calendar-overlay {
   position: fixed;
   inset: 0;
@@ -1838,7 +1863,7 @@ body {
 .title-line {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.5rem;
   min-width: 0;
   width: 100%;
 }
@@ -1889,27 +1914,33 @@ body {
 }
 
 .workout-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 1 1 auto;
   min-width: 0;
-  flex: 1;
+  white-space: normal;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .title-line-end {
   margin-left: auto;
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.375rem;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0;
   flex-shrink: 0;
-  min-width: 0;
+  width: 5.5em;
+  min-width: 5.5em;
 }
 
 .workout-metric {
-  flex: 0 0 5.5em;
-  width: 5.5em;
-  min-width: 5.5em;
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
   white-space: nowrap;
   margin-left: 0;
   background: none;
@@ -1917,7 +1948,7 @@ body {
   color: inherit;
   font-family: inherit;
   padding: 0;
-  min-height: 44px;
+  min-height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
@@ -1928,10 +1959,11 @@ body {
 
 .workout-sets-reps {
   flex-shrink: 0;
+  width: 100%;
   white-space: nowrap;
-  font-size: 0.9375rem;
+  font-size: 0.75rem;
   font-weight: 500;
-  line-height: 1.3;
+  line-height: 1.15;
   color: var(--text-secondary);
   text-align: right;
 }
