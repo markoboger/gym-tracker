@@ -17,10 +17,19 @@ import {
   nextTargetSets,
   setProgressColors,
   kgCounterColor,
-  countTargetHitDays
+  countTargetHitDays,
+  TARGET_SET_OPTIONS
 } from './set-progress.js'
+import {
+  todayIso,
+  shiftIsoDate,
+  formatDateShort,
+  clampIsoToToday,
+  isTodayOrFuture,
+  getWorkoutAsOf
+} from './session-day.js'
 
-const currentDate = ref(new Date().toISOString().split('T')[0])
+const currentDate = ref(todayIso())
 const workouts = ref([])
 const sessions = ref([])
 const showHistory = ref(false)
@@ -145,7 +154,7 @@ const availableSeasons = computed(() => {
 })
 
 const currentSeason = computed(() => {
-  return getSeasonFromDate(new Date().toISOString().split('T')[0])
+  return getSeasonFromDate(todayIso())
 })
 
 const filteredSessions = computed(() => {
@@ -228,21 +237,8 @@ const selectedExerciseUnitLabel = computed(() => {
   return equipment?.unit === 'min' ? 'min' : 'kg'
 })
 
-function getMostRecentWorkoutData(equipmentId) {
-  // Sort sessions chronologically, most recent first
-  const sortedSessions = [...sessions.value].sort((a, b) => 
-    new Date(b.date) - new Date(a.date)
-  )
-  
-  // Find the most recent session that has this equipment
-  for (const session of sortedSessions) {
-    const workout = session.workouts.find(w => w.equipmentId === equipmentId)
-    if (workout) {
-      return workout
-    }
-  }
-  
-  return null
+function getMostRecentWorkoutData(equipmentId, date = currentDate.value) {
+  return getWorkoutAsOf(sessions.value, equipmentId, date)
 }
 
 function workoutUnit(workout) {
@@ -281,80 +277,43 @@ function initWorkouts(isNewDay = false) {
   const enabledEquipmentData = equipmentData.filter(eq => enabledEquipment.value.has(eq.id))
   
   if (!existingSession || isNewDay) {
-    // Create fresh workout list from enabled equipment
-    workouts.value = enabledEquipmentData.map(eq => {
-      if (isNewDay) {
-        // For new training day: carry forward kg/reps from most recent, but sets = 0
-        const recentWorkout = getMostRecentWorkoutData(eq.id)
-        
-        if (recentWorkout) {
-          return {
-            equipmentId: eq.id,
-            name: eq.name,
-            nr: eq.nr,
-            kg: recentWorkout.kg,
-            sets: 0,
-            reps: recentWorkout.reps,
-            meters: eq.isCardio ? (recentWorkout.meters || 0) : null,
-            minutes: initialMinutes(eq, recentWorkout),
-            isCardio: eq.isCardio,
-            isSauna: eq.isSauna,
-            unit: eq.unit || 'kg',
-            completed: false,
-            collapsed: true
-          }
-        }
-      }
-      
-      // Default values for new session or no previous data
-      return {
-        equipmentId: eq.id,
-        name: eq.name,
-        nr: eq.nr,
-        kg: eq.unit === 'min' ? 0 : eq.defaultKg,
-        sets: 0,
-        reps: eq.reps,
-        meters: eq.isCardio ? 0 : null,
-        minutes: initialMinutes(eq),
-        isCardio: eq.isCardio,
-        isSauna: eq.isSauna,
-        unit: eq.unit || 'kg',
-        completed: false,
-        collapsed: true
-      }
-    })
+    workouts.value = enabledEquipmentData.map(eq => buildWorkoutForDay(eq, null, { resetIst: !!isNewDay }))
   } else {
-    // Load existing session - expand to show all enabled equipment
     const sessionWorkoutMap = new Map(
       existingSession.workouts.map(w => [w.equipmentId, w])
     )
-    
     workouts.value = enabledEquipmentData.map(eq => {
-      const existing = sessionWorkoutMap.get(eq.id)
-      if (existing) {
-        return { 
-          ...existing, 
-          completed: existing.completed !== undefined ? existing.completed : true,
-          collapsed: existing.collapsed !== undefined ? existing.collapsed : true
-        }
-      } else {
-        return {
-          equipmentId: eq.id,
-          name: eq.name,
-          nr: eq.nr,
-          kg: eq.unit === 'min' ? 0 : eq.defaultKg,
-          sets: 0,
-          reps: eq.reps,
-          meters: eq.isCardio ? 0 : null,
-          minutes: initialMinutes(eq),
-          isCardio: eq.isCardio,
-          isSauna: eq.isSauna,
-          unit: eq.unit || 'kg',
-          completed: false,
-          collapsed: true
-        }
-      }
+      return buildWorkoutForDay(eq, sessionWorkoutMap.get(eq.id) || null)
     })
+  }
+}
+
+function buildWorkoutForDay(eq, existing, { resetIst = false } = {}) {
+  const asOf = getWorkoutAsOf(sessions.value, eq.id, currentDate.value)
+  const settings = getMachineSettings(eq.id)
+  const kgFallback = eq.unit === 'min' ? 0 : eq.defaultKg
+  const stored = resetIst ? null : (existing || (asOf.fromExactDay ? asOf.source : null))
+  const kg = stored?.kg != null ? stored.kg : (asOf.kg != null ? asOf.kg : kgFallback)
+  const reps = stored?.reps != null ? stored.reps : (asOf.reps != null ? asOf.reps : eq.reps)
+  const minutesSource = stored || (asOf.minutes != null || asOf.kg != null || asOf.reps != null ? asOf : null)
+  const targetSets = normalizeTargetSets(
+    stored?.targetSets ?? asOf.targetSets ?? settings.targetSets
+  )
+  return {
+    equipmentId: eq.id,
+    name: eq.name,
+    nr: eq.nr,
+    kg,
+    sets: stored ? (stored.sets || 0) : 0,
+    reps,
+    meters: eq.isCardio ? (stored?.meters ?? asOf.meters ?? 0) : null,
+    minutes: initialMinutes(eq, minutesSource),
+    isCardio: eq.isCardio,
+    isSauna: eq.isSauna,
+    unit: eq.unit || 'kg',
+    targetSets,
+    completed: stored?.completed !== undefined ? stored.completed : false,
+    collapsed: stored?.collapsed !== undefined ? stored.collapsed : true
   }
 }
 
@@ -395,7 +354,8 @@ function sessionShouldPersist(workout) {
     workout.completed ||
     (workout.sets || 0) > 0 ||
     (workout.minutes || 0) > 0 ||
-    (workout.meters || 0) > 0
+    (workout.meters || 0) > 0 ||
+    workout.sollEdited
   )
 }
 
@@ -515,7 +475,43 @@ function cancelNrPress() {
 }
 
 function targetSetsFor(workout) {
+  if (workout.targetSets != null) return normalizeTargetSets(workout.targetSets)
   return getMachineSettings(workout.equipmentId).targetSets
+}
+
+const isViewingToday = computed(() => isTodayOrFuture(currentDate.value))
+
+function shiftDay(delta) {
+  const next = clampIsoToToday(shiftIsoDate(currentDate.value, delta))
+  if (next === currentDate.value && delta > 0) return
+  currentDate.value = next
+  initWorkouts()
+}
+
+function onDateChange() {
+  currentDate.value = clampIsoToToday(currentDate.value)
+  initWorkouts()
+}
+
+function applyTargetSets(workout, value) {
+  const next = normalizeTargetSets(value)
+  workout.targetSets = next
+  workout.sollEdited = true
+  if (isViewingToday.value) {
+    saveMachineSettings(workout.equipmentId, {
+      ...getMachineSettings(workout.equipmentId),
+      targetSets: next
+    })
+  }
+  saveToday()
+}
+
+function incrementTargetSets(workout) {
+  applyTargetSets(workout, nextTargetSets(targetSetsFor(workout), 1))
+}
+
+function decrementTargetSets(workout) {
+  applyTargetSets(workout, nextTargetSets(targetSetsFor(workout), -1))
 }
 
 function showSollReps(workout) {
@@ -541,11 +537,16 @@ function nrBadgeStyle(workout) {
 function weightColor(workout) {
   if (workoutUnit(workout) === 'min') return null
   const settings = getMachineSettings(workout.equipmentId)
+  const viewed = currentDate.value
+  const sessionsToDate = sessions.value.filter((session) => session.date <= viewed)
+  const lastIncrease = settings.lastIncreaseDate && settings.lastIncreaseDate <= viewed
+    ? settings.lastIncreaseDate
+    : undefined
   const count = countTargetHitDays({
-    sessions: sessions.value,
+    sessions: sessionsToDate,
     equipmentId: workout.equipmentId,
-    targetSets: settings.targetSets,
-    lastIncreaseDate: settings.lastIncreaseDate
+    targetSets: targetSetsFor(workout),
+    lastIncreaseDate: lastIncrease
   })
   return kgCounterColor(count)
 }
@@ -570,7 +571,7 @@ function backToToday() {
   showHistory.value = false
   editingSession.value = null
   historyView.value = 'sessions'
-  currentDate.value = new Date().toISOString().split('T')[0]
+  currentDate.value = todayIso()
   initWorkouts()
 }
 
@@ -603,7 +604,7 @@ function viewSession(session) {
 function backToHistory() {
   showHistory.value = true
   editingSession.value = null
-  currentDate.value = new Date().toISOString().split('T')[0]
+  currentDate.value = todayIso()
 }
 
 function getX(index) {
@@ -654,7 +655,7 @@ function exportData() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `happyfit-export-${new Date().toISOString().split('T')[0]}.json`
+  a.download = `happyfit-export-${todayIso()}.json`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -753,7 +754,7 @@ function disableAll() {
 
 function createNewDay() {
   // Set current date to today
-  currentDate.value = new Date().toISOString().split('T')[0]
+  currentDate.value = todayIso()
   
   // Check if today already has a session
   const todayHasSession = sessions.value.some(s => s.date === currentDate.value)
@@ -773,7 +774,7 @@ function createNewDay() {
 function openPicker(workout, field) {
   pickerWorkout.value = workout
   pickerField.value = field
-  pickerValue.value = workout[field] ?? 0
+  pickerValue.value = field === 'targetSets' ? targetSetsFor(workout) : (workout[field] ?? 0)
   showPicker.value = true
 }
 
@@ -787,10 +788,14 @@ function applyPickerValue() {
   if (pickerWorkout.value && pickerField.value) {
     const workout = pickerWorkout.value
     const field = pickerField.value
-    const previous = workout[field]
-    workout[field] = pickerValue.value
-    if (field === 'kg') recordKgIncreaseIfNeeded(workout, previous, pickerValue.value)
-    saveToday()
+    if (field === 'targetSets') {
+      applyTargetSets(workout, pickerValue.value)
+    } else {
+      const previous = workout[field]
+      workout[field] = pickerValue.value
+      if (field === 'kg') recordKgIncreaseIfNeeded(workout, previous, pickerValue.value)
+      saveToday()
+    }
   }
   closePicker()
 }
@@ -810,6 +815,11 @@ function getPickerRange(field) {
       return values.reverse()
     }
     return values
+  } else if (field === 'targetSets') {
+    return TARGET_SET_OPTIONS.map((value) => ({
+      name: `${value}`,
+      value
+    }))
   } else if (field === 'sets') {
     return Array.from({ length: 11 }, (_, i) => ({ 
       name: `${i}`, 
@@ -869,7 +879,35 @@ onMounted(async () => {
               + Neuer Tag
             </button>
           </div>
-          <input type="date" v-model="currentDate" @change="initWorkouts" class="date-input" />
+          <div class="date-nav" role="group" aria-label="Tag wählen">
+            <button
+              type="button"
+              class="date-nav-btn"
+              data-test="date-prev"
+              aria-label="Vorheriger Tag"
+              @click="shiftDay(-1)"
+            >‹</button>
+            <div class="date-nav-btn date-nav-current">
+              <span class="date-nav-label" data-test="date-label">{{ formatDateShort(currentDate) }}</span>
+              <input
+                type="date"
+                class="date-nav-input"
+                data-test="date-input"
+                v-model="currentDate"
+                :max="todayIso()"
+                @change="onDateChange"
+                aria-label="Datum"
+              />
+            </div>
+            <button
+              type="button"
+              class="date-nav-btn"
+              data-test="date-next"
+              aria-label="Nächster Tag"
+              :disabled="isViewingToday"
+              @click="shiftDay(1)"
+            >›</button>
+          </div>
         </div>
 
         <div class="workouts-list">
@@ -889,7 +927,7 @@ onMounted(async () => {
                 <div class="title-line">
                   <button
                     type="button"
-                    class="workout-nr"
+                    class="workout-nr workout-title-size"
                     :style="nrBadgeStyle(workout)"
                     @click.stop
                     @pointerdown.stop="startNrPress(workout, $event)"
@@ -898,6 +936,10 @@ onMounted(async () => {
                     @contextmenu.prevent.stop
                   >{{ workout.nr || '•' }}</button>
                   <span class="workout-name workout-title-size">{{ workout.name }}</span>
+                  <span
+                    v-if="showSollReps(workout)"
+                    class="workout-sets-reps"
+                  >{{ targetSetsFor(workout) }}×{{ workout.reps }}</span>
                   <button
                     v-if="showWorkoutMetric(workout)"
                     type="button"
@@ -907,10 +949,6 @@ onMounted(async () => {
                   >
                     {{ primaryValue(workout) }} {{ primaryLabel(workout) }}
                   </button>
-                  <span
-                    v-if="showSollReps(workout)"
-                    class="workout-sets-reps"
-                  >{{ targetSetsFor(workout) }}×{{ workout.reps }}</span>
                 </div>
               </div>
               <div class="header-actions">
@@ -965,16 +1003,40 @@ onMounted(async () => {
                 <button @click="increment(workout, 'minutes')" class="btn-stepper-mini">+</button>
               </div>
 
-              <div class="control-group compact">
-                <label>Sets</label>
-                <button @click="decrement(workout, 'sets')" class="btn-stepper-mini">−</button>
+              <div class="control-group compact" v-if="!workout.isSauna" data-test="sets-soll">
+                <label>Sets soll</label>
+                <button
+                  type="button"
+                  class="btn-stepper-mini"
+                  :disabled="targetSetsFor(workout) <= 2"
+                  @click="decrementTargetSets(workout)"
+                >−</button>
                 <button 
+                  type="button"
+                  @click="openPicker(workout, 'targetSets')"
+                  class="picker-trigger"
+                >
+                  {{ targetSetsFor(workout) }}
+                </button>
+                <button
+                  type="button"
+                  class="btn-stepper-mini"
+                  :disabled="targetSetsFor(workout) >= 5"
+                  @click="incrementTargetSets(workout)"
+                >+</button>
+              </div>
+
+              <div class="control-group compact" v-if="!workout.isSauna" data-test="sets-ist">
+                <label>Sets ist</label>
+                <button type="button" @click="decrementActualSets(workout)" class="btn-stepper-mini">−</button>
+                <button 
+                  type="button"
                   @click="openPicker(workout, 'sets')"
                   class="picker-trigger"
                 >
-                  {{ workout.sets }}
+                  {{ workout.sets || 0 }}
                 </button>
-                <button @click="increment(workout, 'sets')" class="btn-stepper-mini">+</button>
+                <button type="button" @click="incrementActualSets(workout)" class="btn-stepper-mini">+</button>
               </div>
 
               <div class="control-group compact" v-if="!workout.isCardio && !workout.isSauna">
@@ -1248,7 +1310,7 @@ onMounted(async () => {
       <div class="picker-modal" @click.stop>
         <div class="picker-header">
           <button @click="closePicker" class="picker-cancel">Abbrechen</button>
-          <span class="picker-title">{{ pickerField === 'kg' ? 'Kilogramm' : pickerField === 'minutes' ? 'Minuten' : pickerField === 'sets' ? 'Sets' : 'Reps' }}</span>
+          <span class="picker-title">{{ pickerField === 'kg' ? 'Kilogramm' : pickerField === 'minutes' ? 'Minuten' : pickerField === 'targetSets' ? 'Sets soll' : pickerField === 'sets' ? 'Sets ist' : 'Reps' }}</span>
           <button @click="applyPickerValue" class="picker-done">Fertig</button>
         </div>
         <div class="picker-wheel-container">
@@ -1337,7 +1399,7 @@ onMounted(async () => {
           </div>
 
           <div class="settings-help">
-            <p><strong>Ziel-Sätze:</strong> Wie viele Sets du anstrebst (2-5)</p>
+            <p><strong>Ziel-Sätze:</strong> Wie viele Sets du anstrebst (2, 4 oder 5 — nicht 3)</p>
             <p><strong>Gewichts-Schritte:</strong> Wie viel kg sich pro +/− ändern (typisch: 5 kg)</p>
             <p><strong>Anfangswert:</strong> Standard-Gewicht für neue Tage</p>
             <p><strong>Zählrichtung:</strong> Hoch = mehr kg ist besser (normal). Runter = weniger kg ist besser (z.B. Klimmzüge mit Unterstützung)</p>
@@ -1475,14 +1537,65 @@ body {
   opacity: 0.8;
 }
 
-.date-input {
-  width: 100%;
-  padding: 0.75rem;
+.date-nav {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.date-nav-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 44px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 12px;
   color: var(--text-primary);
-  font-size: 1rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.date-nav-btn:active:not(:disabled) {
+  background: var(--border);
+}
+
+.date-nav-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.date-nav-current {
+  font-size: 0.875rem;
+}
+
+.date-nav-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.date-nav-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color-scheme: dark;
 }
 
 .workouts-list {
@@ -1500,8 +1613,10 @@ body {
 }
 
 .workout-card.collapsed {
-  padding: 0.25rem 0.75rem;
+  padding: 0.125rem 0.5rem;
   min-height: 48px;
+  display: flex;
+  align-items: center;
 }
 
 .workout-card.collapsed:active {
@@ -1534,8 +1649,8 @@ body {
 
 .title-line {
   display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
+  align-items: center;
+  gap: 0.375rem;
   min-width: 0;
   width: 100%;
 }
@@ -1550,18 +1665,21 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 40px;
-  min-height: 40px;
-  padding: 0 0.35rem;
+  box-sizing: border-box;
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
   border: none;
   border-radius: 8px;
   background: var(--bg-tertiary);
-  font-size: 0.75rem;
-  font-weight: 600;
   font-family: inherit;
   color: var(--text-secondary);
   flex-shrink: 0;
   line-height: 1;
+  overflow: hidden;
   cursor: pointer;
   user-select: none;
   touch-action: manipulation;
@@ -1587,12 +1705,17 @@ body {
 .workout-metric {
   flex-shrink: 0;
   white-space: nowrap;
-  margin-left: auto;
+  margin-left: 0;
   background: none;
   border: none;
   color: inherit;
   font-family: inherit;
-  padding: 0;
+  padding: 0 0 0 0.125rem;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  text-align: right;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
@@ -1600,10 +1723,12 @@ body {
 .workout-sets-reps {
   flex-shrink: 0;
   white-space: nowrap;
+  margin-left: auto;
   font-size: 0.9375rem;
   font-weight: 500;
   line-height: 1.3;
   color: var(--text-secondary);
+  text-align: right;
 }
 
 .workout-controls {

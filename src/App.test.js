@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import App from './App.vue'
+import { todayIso, shiftIsoDate, formatDateShort } from './session-day.js'
+import { COLORS, setProgressColors } from './set-progress.js'
 import { db, storage } from './db/index.js'
 
 vi.mock('./db/index.js', () => ({
@@ -75,6 +77,15 @@ async function mountReady() {
   const wrapper = mount(App)
   await flushPromises()
   return wrapper
+}
+
+
+function cssRgb(hex) {
+  const h = String(hex).replace('#', '')
+  const r = parseInt(h.slice(0, 2), 16)
+  const g = parseInt(h.slice(2, 4), 16)
+  const b = parseInt(h.slice(4, 6), 16)
+  return `rgb(${r}, ${g}, ${b})`
 }
 
 function cardByName(wrapper, name) {
@@ -207,5 +218,186 @@ describe('machine card title line', () => {
     expect(labels).toContain('min')
     expect(labels).toContain('Meter')
     expect(labels).not.toContain('kg')
+  })
+})
+
+
+describe('machine card layout v14', () => {
+  it('puts sets×reps at the end of the name and kg at the far right of the title line', async () => {
+    const wrapper = await mountReady()
+    const card = cardByName(wrapper, 'Butterfly reverse')
+    const classes = Array.from(card.find('.title-line').element.children).map((el) => el.className)
+    expect(classes[0]).toMatch(/workout-nr/)
+    expect(classes[1]).toMatch(/workout-name/)
+    expect(classes[2]).toMatch(/workout-sets-reps/)
+    expect(classes[3]).toMatch(/workout-metric/)
+    expect(card.find('.workout-metric').text()).toBe('35 kg')
+    expect(card.find('.workout-sets-reps').text()).toBe('2×8')
+  })
+
+  it('uses the same title font on the number badge as on the name and kg', async () => {
+    const wrapper = await mountReady()
+    const card = cardByName(wrapper, 'Butterfly reverse')
+    expect(card.find('.workout-nr').classes()).toContain('workout-title-size')
+    expect(card.find('.workout-name').classes()).toContain('workout-title-size')
+    expect(card.find('.workout-metric').classes()).toContain('workout-title-size')
+  })
+
+  it('does not treat catalog sets: 3 as soll or as ist; a fresh card stays neutral', async () => {
+    const wrapper = await mountReady()
+    const card = cardByName(wrapper, 'Butterfly reverse')
+    expect(card.find('.workout-sets-reps').text()).toBe('2×8')
+    expect(card.attributes('style') || '').toContain(cssRgb(COLORS.neutralCard))
+    const badgeStyle = card.find('.workout-nr').attributes('style') || ''
+    expect(badgeStyle).toContain(cssRgb(COLORS.neutralBadge))
+  })
+})
+
+describe('Sets soll vs Sets ist', () => {
+  it('shows separate labeled steppers in the expanded card and keeps soll on the title line', async () => {
+    const wrapper = await mountReady()
+    const card = cardByName(wrapper, 'Butterfly reverse')
+    await card.find('.workout-header').trigger('click')
+    await flushPromises()
+    const expanded = cardByName(wrapper, 'Butterfly reverse')
+    const soll = expanded.find('[data-test="sets-soll"]')
+    const ist = expanded.find('[data-test="sets-ist"]')
+    expect(soll.exists()).toBe(true)
+    expect(ist.exists()).toBe(true)
+    expect(soll.find('label').text()).toBe('Sets soll')
+    expect(ist.find('label').text()).toBe('Sets ist')
+    expect(soll.find('.picker-trigger').text()).toBe('2')
+    expect(ist.find('.picker-trigger').text()).toBe('0')
+    expect(expanded.find('.workout-sets-reps').text()).toBe('2×8')
+  })
+
+  it('ist stepper and badge taps change actual sets only, and soll stepper skips 3 (2/4/5)', async () => {
+    const wrapper = await mountReady()
+    const card = cardByName(wrapper, 'Butterfly reverse')
+    await card.find('.workout-header').trigger('click')
+    await flushPromises()
+
+    const expanded = () => cardByName(wrapper, 'Butterfly reverse')
+    await expanded().find('[data-test="sets-ist"] .btn-stepper-mini:last-child').trigger('click')
+    await flushPromises()
+    expect(expanded().find('[data-test="sets-ist"] .picker-trigger').text()).toBe('1')
+    expect(expanded().find('[data-test="sets-soll"] .picker-trigger').text()).toBe('2')
+    expect(expanded().find('.workout-sets-reps').text()).toBe('2×8')
+
+    await expanded().find('[data-test="sets-soll"] .btn-stepper-mini:last-child').trigger('click')
+    await flushPromises()
+    expect(expanded().find('[data-test="sets-soll"] .picker-trigger').text()).toBe('4')
+    expect(expanded().find('[data-test="sets-ist"] .picker-trigger').text()).toBe('1')
+    expect(expanded().find('.workout-sets-reps').text()).toBe('4×8')
+
+    const saved = storage.putSession.mock.calls.at(-1)[0]
+    const workout = saved.workouts.find((item) => item.name.trim() === 'Butterfly reverse')
+    expect(workout.sets).toBe(1)
+    expect(workout.targetSets).toBe(4)
+    expect(workout.targetSets).not.toBe(3)
+  })
+
+  it('binds card and badge colors to ist versus soll, not to soll alone', async () => {
+    const wrapper = await mountReady()
+    const card = cardByName(wrapper, 'Butterfly reverse')
+    await card.find('.workout-header').trigger('click')
+    await flushPromises()
+
+    const view = () => cardByName(wrapper, 'Butterfly reverse')
+    const istPlus = () => view().find('[data-test="sets-ist"] .btn-stepper-mini:last-child')
+    const sollPlus = () => view().find('[data-test="sets-soll"] .btn-stepper-mini:last-child')
+
+    await istPlus().trigger('click')
+    await istPlus().trigger('click')
+    await flushPromises()
+    expect((view().find('.workout-nr').attributes('style') || '')).toContain(
+      cssRgb(setProgressColors(2, 2).badge)
+    )
+
+    await sollPlus().trigger('click')
+    await flushPromises()
+    expect((view().find('.workout-nr').attributes('style') || '')).toContain(
+      cssRgb(setProgressColors(2, 4).badge)
+    )
+    expect(setProgressColors(2, 4).badge).not.toBe(setProgressColors(2, 2).badge)
+  })
+})
+
+describe('date navigation and per-day state', () => {
+  it('steps one day back and forward and disables the next button on today', async () => {
+    const wrapper = await mountReady()
+    const today = todayIso()
+    expect(wrapper.vm.currentDate).toBe(today)
+    expect(wrapper.find('[data-test="date-label"]').text()).toBe(formatDateShort(today))
+    expect(wrapper.find('[data-test="date-next"]').element.disabled).toBe(true)
+
+    await wrapper.find('[data-test="date-prev"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.currentDate).toBe(shiftIsoDate(today, -1))
+    expect(wrapper.find('[data-test="date-next"]').element.disabled).toBe(false)
+
+    await wrapper.find('[data-test="date-next"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.currentDate).toBe(today)
+    expect(wrapper.find('[data-test="date-next"]').element.disabled).toBe(true)
+  })
+
+  it('shows that day’s stored kg, ist and reps, and fills missing kg from earlier history', async () => {
+    const today = todayIso()
+    const d1 = shiftIsoDate(today, -2)
+    const d2 = shiftIsoDate(today, -1)
+    storage.getSessions.mockResolvedValue([
+      { date: d1, workouts: [{ equipmentId: 3, name: 'Butterfly reverse', kg: 30, sets: 2, reps: 8, targetSets: 2 }] },
+      { date: d2, workouts: [{ equipmentId: 3, name: 'Butterfly reverse', sets: 1, reps: 10, targetSets: 4 }] }
+    ])
+    const wrapper = await mountReady()
+
+    await wrapper.find('[data-test="date-prev"]').trigger('click')
+    await flushPromises()
+    let card = cardByName(wrapper, 'Butterfly reverse')
+    expect(wrapper.vm.currentDate).toBe(d2)
+    expect(card.find('.workout-metric').text()).toBe('30 kg')
+    expect(card.find('.workout-sets-reps').text()).toBe('4×10')
+    await card.find('.workout-header').trigger('click')
+    await flushPromises()
+    expect(cardByName(wrapper, 'Butterfly reverse').find('[data-test="sets-ist"] .picker-trigger').text()).toBe('1')
+    expect(cardByName(wrapper, 'Butterfly reverse').find('[data-test="sets-soll"] .picker-trigger').text()).toBe('4')
+
+    await wrapper.find('[data-test="date-prev"]').trigger('click')
+    await flushPromises()
+    card = cardByName(wrapper, 'Butterfly reverse')
+    expect(wrapper.vm.currentDate).toBe(d1)
+    expect(card.find('.workout-metric').text()).toBe('30 kg')
+    expect(card.find('.workout-sets-reps').text()).toBe('2×8')
+    await card.find('.workout-header').trigger('click')
+    await flushPromises()
+    expect(cardByName(wrapper, 'Butterfly reverse').find('[data-test="sets-ist"] .picker-trigger').text()).toBe('2')
+  })
+
+  it('writes ist edits to the viewed past day and does not change today', async () => {
+    const today = todayIso()
+    const past = shiftIsoDate(today, -3)
+    storage.getSessions.mockResolvedValue([
+      { date: past, workouts: [{ equipmentId: 3, name: 'Butterfly reverse', kg: 30, sets: 1, reps: 8 }] }
+    ])
+    const wrapper = await mountReady()
+    for (let i = 0; i < 3; i++) {
+      await wrapper.find('[data-test="date-prev"]').trigger('click')
+      await flushPromises()
+    }
+    expect(wrapper.vm.currentDate).toBe(past)
+    storage.putSession.mockClear()
+
+    const card = cardByName(wrapper, 'Butterfly reverse')
+    await card.find('.workout-nr').trigger('pointerdown')
+    await card.find('.workout-nr').trigger('pointerup')
+    await flushPromises()
+
+    const savedDates = storage.putSession.mock.calls.map((call) => call[0].date)
+    expect(savedDates).toContain(past)
+    expect(savedDates).not.toContain(today)
+    const saved = storage.putSession.mock.calls.at(-1)[0]
+    expect(saved.date).toBe(past)
+    expect(saved.workouts.find((item) => item.equipmentId === 3).sets).toBe(2)
   })
 })
