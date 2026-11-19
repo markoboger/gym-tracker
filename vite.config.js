@@ -48,7 +48,7 @@ export default defineConfig(({ command }) => ({
         ]
       },
       workbox: {
-        cacheId: 'happyfit-v19',
+        cacheId: 'happyfit-v20',
         // Firebase Auth (/__/auth on firebaseapp.com) and Firestore/googleapis are cross-origin and never cached by the SW
         navigateFallbackDenylist: [/^\/__\//],
         globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
