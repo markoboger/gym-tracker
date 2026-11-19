@@ -82,3 +82,73 @@ export function getWorkoutAsOf(sessions, equipmentId, date) {
     source: sameDayWorkout
   }
 }
+
+
+export const WEEKDAYS_MON_FIRST = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
+export const MONTHS_DE = [
+  'Januar', 'Februar', 'März', 'April', 'Mai', 'Juni',
+  'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'
+]
+
+/** A day counts as a training entry when any workout has recorded activity. */
+export function sessionHasTrainingEntry(session) {
+  return (session?.workouts || []).some((workout) => !!(
+    workout.completed ||
+    (workout.sets || 0) > 0 ||
+    (workout.minutes || 0) > 0 ||
+    (workout.meters || 0) > 0 ||
+    workout.sollEdited ||
+    (typeof workout.kg === 'number' && workout.kg > 0)
+  ))
+}
+
+export function trainingDates(sessions, today = todayIso()) {
+  const dates = new Set()
+  for (const session of sessions || []) {
+    if (session?.date && session.date <= today && sessionHasTrainingEntry(session)) {
+      dates.add(session.date)
+    }
+  }
+  return [...dates].sort()
+}
+
+export function previousTrainingDate(sessions, current, today = todayIso()) {
+  const earlier = trainingDates(sessions, today).filter((date) => date < current)
+  return earlier.length ? earlier[earlier.length - 1] : null
+}
+
+/**
+ * Next training day after `current`, or today when there is no later entry
+ * and today itself is still ahead (today is always reachable).
+ */
+export function nextTrainingDate(sessions, current, today = todayIso()) {
+  if (current >= today) return null
+  const later = trainingDates(sessions, today).filter((date) => date > current)
+  return later.length ? later[0] : today
+}
+
+export function shiftMonth(year, month, delta) {
+  const date = new Date(year, month + Number(delta), 1)
+  return { year: date.getFullYear(), month: date.getMonth() }
+}
+
+export function formatMonthTitle(year, month) {
+  return `${MONTHS_DE[month]} ${year}`
+}
+
+/** Monday-first 6×7 month grid. */
+export function monthGrid(year, month) {
+  const first = new Date(year, month, 1)
+  const mondayOffset = (first.getDay() + 6) % 7
+  const start = new Date(year, month, 1 - mondayOffset)
+  const cells = []
+  for (let i = 0; i < 42; i += 1) {
+    const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i)
+    cells.push({
+      iso: toIsoDate(date),
+      day: date.getDate(),
+      inMonth: date.getMonth() === month
+    })
+  }
+  return cells
+}

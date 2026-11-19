@@ -5,7 +5,14 @@ import {
   isTodayOrFuture,
   clampIsoToToday,
   formatDateShort,
-  getWorkoutAsOf
+  getWorkoutAsOf,
+  sessionHasTrainingEntry,
+  trainingDates,
+  previousTrainingDate,
+  nextTrainingDate,
+  monthGrid,
+  WEEKDAYS_MON_FIRST,
+  formatMonthTitle
 } from './session-day.js'
 
 describe('date helpers', () => {
@@ -79,5 +86,57 @@ describe('getWorkoutAsOf', () => {
     expect(row.kg).toBeNull()
     expect(row.reps).toBeNull()
     expect(getWorkoutAsOf(sessions, 99, '2026-11-19').kg).toBeNull()
+  })
+})
+
+
+describe('training-day detection and stepping', () => {
+  const today = '2026-11-19'
+  const sessions = [
+    { date: '2026-11-10', workouts: [{ equipmentId: 3, kg: 30, sets: 2, reps: 8 }] },
+    { date: '2026-11-12', workouts: [] },
+    { date: '2026-11-14', workouts: [{ equipmentId: 3, kg: 0, sets: 0, reps: 8 }] },
+    { date: '2026-11-16', workouts: [{ equipmentId: 3, kg: 35, sets: 0, reps: 8 }] },
+    { date: '2026-11-20', workouts: [{ equipmentId: 3, kg: 40, sets: 2, reps: 8 }] }
+  ]
+
+  it('treats recorded sets, minutes, meters, completed, soll edits, or kg as a training entry', () => {
+    expect(sessionHasTrainingEntry({ workouts: [{ sets: 1 }] })).toBe(true)
+    expect(sessionHasTrainingEntry({ workouts: [{ minutes: 10 }] })).toBe(true)
+    expect(sessionHasTrainingEntry({ workouts: [{ meters: 500 }] })).toBe(true)
+    expect(sessionHasTrainingEntry({ workouts: [{ completed: true }] })).toBe(true)
+    expect(sessionHasTrainingEntry({ workouts: [{ sollEdited: true }] })).toBe(true)
+    expect(sessionHasTrainingEntry({ workouts: [{ kg: 35, sets: 0 }] })).toBe(true)
+    expect(sessionHasTrainingEntry({ workouts: [{ kg: 0, sets: 0, reps: 8 }] })).toBe(false)
+    expect(sessionHasTrainingEntry({ workouts: [] })).toBe(false)
+  })
+
+  it('lists unique training dates on or before today, skipping empty or future sessions', () => {
+    expect(trainingDates(sessions, today)).toEqual(['2026-11-10', '2026-11-16'])
+  })
+
+  it('steps prev to the previous training day and next toward the next entry or today', () => {
+    expect(previousTrainingDate(sessions, today, today)).toBe('2026-11-16')
+    expect(previousTrainingDate(sessions, '2026-11-16', today)).toBe('2026-11-10')
+    expect(previousTrainingDate(sessions, '2026-11-10', today)).toBeNull()
+    expect(previousTrainingDate(sessions, '2026-11-14', today)).toBe('2026-11-10')
+
+    expect(nextTrainingDate(sessions, '2026-11-10', today)).toBe('2026-11-16')
+    expect(nextTrainingDate(sessions, '2026-11-16', today)).toBe(today)
+    expect(nextTrainingDate(sessions, '2026-11-14', today)).toBe('2026-11-16')
+    expect(nextTrainingDate(sessions, today, today)).toBeNull()
+    expect(nextTrainingDate([], '2026-11-10', today)).toBe(today)
+  })
+
+  it('builds a Monday-first month grid', () => {
+    expect(WEEKDAYS_MON_FIRST).toEqual(['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'])
+    const cells = monthGrid(2026, 10) // November 2026 starts on Sunday
+    expect(cells).toHaveLength(42)
+    expect(cells[0].iso).toBe('2026-10-26')
+    expect(cells[0].inMonth).toBe(false)
+    expect(cells[6].iso).toBe('2026-11-01')
+    expect(cells[6].inMonth).toBe(true)
+    expect(cells[6].day).toBe(1)
+    expect(formatMonthTitle(2026, 10)).toBe('November 2026')
   })
 })

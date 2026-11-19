@@ -48,9 +48,12 @@ describe('App Integration', () => {
     expect(wrapper.find('h1').text()).toContain('HappyFit')
   })
 
-  it('shows date input', () => {
+  it('shows the date button and training-day arrows', () => {
     const wrapper = mount(App)
-    expect(wrapper.find('input[type="date"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="date-current"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="date-prev"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="date-next"]').exists()).toBe(true)
+    expect(wrapper.find('input[type="date"]').exists()).toBe(false)
   })
 
   it('has seedData function available', async () => {
@@ -229,10 +232,14 @@ describe('machine card layout v14', () => {
     const classes = Array.from(card.find('.title-line').element.children).map((el) => el.className)
     expect(classes[0]).toMatch(/workout-nr/)
     expect(classes[1]).toMatch(/workout-name/)
-    expect(classes[2]).toMatch(/workout-sets-reps/)
-    expect(classes[3]).toMatch(/workout-metric/)
+    expect(classes[2]).toMatch(/title-line-end/)
+    const end = card.find('.title-line-end')
+    const endClasses = Array.from(end.element.children).map((el) => el.className)
+    expect(endClasses[0]).toMatch(/workout-sets-reps/)
+    expect(endClasses[1]).toMatch(/workout-metric/)
     expect(card.find('.workout-metric').text()).toBe('35 kg')
     expect(card.find('.workout-sets-reps').text()).toBe('2×8')
+    expect(getComputedStyle(card.find('.workout-metric').element).textAlign).toBe('right')
   })
 
   it('uses the same title font on the number badge as on the name and kg', async () => {
@@ -324,22 +331,70 @@ describe('Sets soll vs Sets ist', () => {
 })
 
 describe('date navigation and per-day state', () => {
-  it('steps one day back and forward and disables the next button on today', async () => {
+  it('disables both arrows when there is no training history and the view is today', async () => {
     const wrapper = await mountReady()
     const today = todayIso()
     expect(wrapper.vm.currentDate).toBe(today)
     expect(wrapper.find('[data-test="date-label"]').text()).toBe(formatDateShort(today))
+    expect(wrapper.find('[data-test="date-prev"]').element.disabled).toBe(true)
     expect(wrapper.find('[data-test="date-next"]').element.disabled).toBe(true)
+  })
+
+  it('steps only between training days and returns to today from the latest entry', async () => {
+    const today = todayIso()
+    const earlier = shiftIsoDate(today, -5)
+    const latest = shiftIsoDate(today, -2)
+    storage.getSessions.mockResolvedValue([
+      { date: earlier, workouts: [{ equipmentId: 3, name: 'Butterfly reverse', kg: 30, sets: 2, reps: 8 }] },
+      { date: latest, workouts: [{ equipmentId: 3, name: 'Butterfly reverse', kg: 35, sets: 2, reps: 8 }] }
+    ])
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-test="date-next"]').element.disabled).toBe(true)
+    expect(wrapper.find('[data-test="date-prev"]').element.disabled).toBe(false)
 
     await wrapper.find('[data-test="date-prev"]').trigger('click')
     await flushPromises()
-    expect(wrapper.vm.currentDate).toBe(shiftIsoDate(today, -1))
-    expect(wrapper.find('[data-test="date-next"]').element.disabled).toBe(false)
+    expect(wrapper.vm.currentDate).toBe(latest)
 
     await wrapper.find('[data-test="date-next"]').trigger('click')
     await flushPromises()
     expect(wrapper.vm.currentDate).toBe(today)
-    expect(wrapper.find('[data-test="date-next"]').element.disabled).toBe(true)
+
+    await wrapper.find('[data-test="date-prev"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="date-prev"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.currentDate).toBe(earlier)
+    expect(wrapper.find('[data-test="date-prev"]').element.disabled).toBe(true)
+
+    await wrapper.find('[data-test="date-next"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.currentDate).toBe(latest)
+    await wrapper.find('[data-test="date-next"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.currentDate).toBe(today)
+  })
+
+  it('opens a custom calendar that marks training days and jumps to a tapped day', async () => {
+    const today = todayIso()
+    const past = shiftIsoDate(today, -4)
+    storage.getSessions.mockResolvedValue([
+      { date: past, workouts: [{ equipmentId: 3, name: 'Butterfly reverse', kg: 30, sets: 2, reps: 8 }] }
+    ])
+    const wrapper = await mountReady()
+    expect(wrapper.find('[data-test="training-calendar"]').exists()).toBe(false)
+    await wrapper.find('[data-test="date-current"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="training-calendar"]').exists()).toBe(true)
+    const marked = wrapper.find(`[data-iso="${past}"]`)
+    expect(marked.exists()).toBe(true)
+    expect(marked.classes()).toContain('has-training')
+    expect(wrapper.find(`[data-iso="${today}"]`).classes()).toContain('is-today')
+    await marked.trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.currentDate).toBe(past)
+    expect(wrapper.find('[data-test="training-calendar"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="date-next"]').element.disabled).toBe(false)
   })
 
   it('shows that day’s stored kg, ist and reps, and fills missing kg from earlier history', async () => {
@@ -381,10 +436,8 @@ describe('date navigation and per-day state', () => {
       { date: past, workouts: [{ equipmentId: 3, name: 'Butterfly reverse', kg: 30, sets: 1, reps: 8 }] }
     ])
     const wrapper = await mountReady()
-    for (let i = 0; i < 3; i++) {
-      await wrapper.find('[data-test="date-prev"]').trigger('click')
-      await flushPromises()
-    }
+    await wrapper.find('[data-test="date-prev"]').trigger('click')
+    await flushPromises()
     expect(wrapper.vm.currentDate).toBe(past)
     storage.putSession.mockClear()
 

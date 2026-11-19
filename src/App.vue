@@ -22,11 +22,16 @@ import {
 } from './set-progress.js'
 import {
   todayIso,
-  shiftIsoDate,
   formatDateShort,
-  clampIsoToToday,
   isTodayOrFuture,
-  getWorkoutAsOf
+  getWorkoutAsOf,
+  previousTrainingDate,
+  nextTrainingDate,
+  trainingDates,
+  monthGrid,
+  shiftMonth,
+  formatMonthTitle,
+  WEEKDAYS_MON_FIRST
 } from './session-day.js'
 
 const currentDate = ref(todayIso())
@@ -480,16 +485,42 @@ function targetSetsFor(workout) {
 }
 
 const isViewingToday = computed(() => isTodayOrFuture(currentDate.value))
+const showCalendar = ref(false)
+const calendarCursor = ref({ year: 2026, month: 0 })
+const trainingDateSet = computed(() => new Set(trainingDates(sessions.value, todayIso())))
+const canGoPrev = computed(() => !!previousTrainingDate(sessions.value, currentDate.value))
+const canGoNext = computed(() => !!nextTrainingDate(sessions.value, currentDate.value))
+const calendarCells = computed(() => monthGrid(calendarCursor.value.year, calendarCursor.value.month))
+const calendarTitle = computed(() => formatMonthTitle(calendarCursor.value.year, calendarCursor.value.month))
 
 function shiftDay(delta) {
-  const next = clampIsoToToday(shiftIsoDate(currentDate.value, delta))
-  if (next === currentDate.value && delta > 0) return
+  const next = delta < 0
+    ? previousTrainingDate(sessions.value, currentDate.value)
+    : nextTrainingDate(sessions.value, currentDate.value)
+  if (!next) return
   currentDate.value = next
+  showCalendar.value = false
   initWorkouts()
 }
 
-function onDateChange() {
-  currentDate.value = clampIsoToToday(currentDate.value)
+function openCalendar() {
+  const [year, month] = currentDate.value.split('-').map(Number)
+  calendarCursor.value = { year, month: month - 1 }
+  showCalendar.value = true
+}
+
+function closeCalendar() {
+  showCalendar.value = false
+}
+
+function shiftCalendarMonth(delta) {
+  calendarCursor.value = shiftMonth(calendarCursor.value.year, calendarCursor.value.month, delta)
+}
+
+function selectCalendarDay(iso) {
+  if (!iso || iso > todayIso()) return
+  currentDate.value = iso
+  showCalendar.value = false
   initWorkouts()
 }
 
@@ -882,31 +913,62 @@ onMounted(async () => {
           <div class="date-nav" role="group" aria-label="Tag wählen">
             <button
               type="button"
-              class="date-nav-btn"
+              class="date-nav-btn date-nav-step"
               data-test="date-prev"
-              aria-label="Vorheriger Tag"
+              aria-label="Vorheriger Trainingstag"
+              :disabled="!canGoPrev"
               @click="shiftDay(-1)"
-            >‹</button>
-            <div class="date-nav-btn date-nav-current">
-              <span class="date-nav-label" data-test="date-label">{{ formatDateShort(currentDate) }}</span>
-              <input
-                type="date"
-                class="date-nav-input"
-                data-test="date-input"
-                v-model="currentDate"
-                :max="todayIso()"
-                @change="onDateChange"
-                aria-label="Datum"
-              />
-            </div>
+            >−</button>
             <button
               type="button"
-              class="date-nav-btn"
+              class="date-nav-btn date-nav-current"
+              data-test="date-current"
+              aria-label="Kalender öffnen"
+              @click="showCalendar ? closeCalendar() : openCalendar()"
+            >
+              <span class="date-nav-label" data-test="date-label">{{ formatDateShort(currentDate) }}</span>
+            </button>
+            <button
+              type="button"
+              class="date-nav-btn date-nav-step"
               data-test="date-next"
-              aria-label="Nächster Tag"
-              :disabled="isViewingToday"
+              aria-label="Nächster Trainingstag"
+              :disabled="!canGoNext"
               @click="shiftDay(1)"
-            >›</button>
+            >+</button>
+          </div>
+          <div v-if="showCalendar" class="calendar-overlay" data-test="calendar-overlay" @click="closeCalendar">
+            <div class="calendar" data-test="training-calendar" @click.stop>
+              <div class="calendar-header">
+                <button type="button" class="calendar-month-btn" data-test="cal-prev-month" aria-label="Vorheriger Monat" @click="shiftCalendarMonth(-1)">‹</button>
+                <span class="calendar-title" data-test="cal-title">{{ calendarTitle }}</span>
+                <button type="button" class="calendar-month-btn" data-test="cal-next-month" aria-label="Nächster Monat" @click="shiftCalendarMonth(1)">›</button>
+              </div>
+              <div class="calendar-weekdays">
+                <span v-for="label in WEEKDAYS_MON_FIRST" :key="label">{{ label }}</span>
+              </div>
+              <div class="calendar-grid">
+                <button
+                  v-for="cell in calendarCells"
+                  :key="cell.iso"
+                  type="button"
+                  class="calendar-day"
+                  :class="{
+                    'is-outside': !cell.inMonth,
+                    'is-today': cell.iso === todayIso(),
+                    'is-selected': cell.iso === currentDate,
+                    'has-training': trainingDateSet.has(cell.iso),
+                    'is-future': cell.iso > todayIso()
+                  }"
+                  :data-iso="cell.iso"
+                  :disabled="cell.iso > todayIso()"
+                  @click="selectCalendarDay(cell.iso)"
+                >
+                  <span class="calendar-day-num">{{ cell.day }}</span>
+                  <span v-if="trainingDateSet.has(cell.iso)" class="calendar-dot"></span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -936,19 +998,21 @@ onMounted(async () => {
                     @contextmenu.prevent.stop
                   >{{ workout.nr || '•' }}</button>
                   <span class="workout-name workout-title-size">{{ workout.name }}</span>
-                  <span
-                    v-if="showSollReps(workout)"
-                    class="workout-sets-reps"
-                  >{{ targetSetsFor(workout) }}×{{ workout.reps }}</span>
-                  <button
-                    v-if="showWorkoutMetric(workout)"
-                    type="button"
-                    class="workout-metric workout-title-size"
-                    :style="{ color: weightColor(workout) || undefined }"
-                    @click.stop="openPicker(workout, primaryField(workout))"
-                  >
-                    {{ primaryValue(workout) }} {{ primaryLabel(workout) }}
-                  </button>
+                  <div class="title-line-end">
+                    <span
+                      v-if="showSollReps(workout)"
+                      class="workout-sets-reps"
+                    >{{ targetSetsFor(workout) }}×{{ workout.reps }}</span>
+                    <button
+                      v-if="showWorkoutMetric(workout)"
+                      type="button"
+                      class="workout-metric workout-title-size"
+                      :style="{ color: weightColor(workout) || undefined, textAlign: 'right' }"
+                      @click.stop="openPicker(workout, primaryField(workout))"
+                    >
+                      {{ primaryValue(workout) }} {{ primaryLabel(workout) }}
+                    </button>
+                  </div>
                 </div>
               </div>
               <div class="header-actions">
@@ -1450,41 +1514,59 @@ body {
   top: 0;
   z-index: 10;
   background: var(--bg-secondary);
-  padding: 1rem;
-  padding-top: calc(1rem + env(safe-area-inset-top));
+  padding: 0.375rem 0.75rem;
+  padding-top: calc(0.375rem + env(safe-area-inset-top));
   border-bottom: 1px solid var(--border);
   display: flex;
   justify-content: space-between;
   align-items: center;
+  min-height: 48px;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  min-width: 44px;
+  min-width: 36px;
 }
 
 .header h1 {
-  font-size: 1.5rem;
+  font-size: 1.05rem;
   font-weight: 600;
+  line-height: 1.2;
   flex: 1;
   text-align: center;
 }
 
-.header-actions {
+.header > .header-actions {
   display: flex;
-  gap: 0.5rem;
-  min-width: 44px;
+  gap: 0.25rem;
+  min-width: 36px;
   justify-content: flex-end;
 }
 
+.header .btn-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  font-size: 1rem;
+}
+
+.header .btn-secondary {
+  min-width: 36px;
+  min-height: 36px;
+  height: 36px;
+  padding: 0 0.55rem;
+  font-size: 0.75rem;
+  border-radius: 8px;
+}
+
 .btn-icon {
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   background: var(--bg-tertiary);
   border: none;
-  border-radius: 12px;
-  font-size: 1.25rem;
+  border-radius: 8px;
+  font-size: 1rem;
   cursor: pointer;
   transition: background 0.2s;
   display: flex;
@@ -1539,14 +1621,11 @@ body {
 
 .date-nav {
   display: flex;
-  gap: 0.5rem;
-  align-items: stretch;
+  gap: 0.375rem;
+  align-items: center;
 }
 
 .date-nav-btn {
-  flex: 1 1 0;
-  min-width: 0;
-  height: 44px;
   position: relative;
   display: flex;
   align-items: center;
@@ -1554,14 +1633,21 @@ body {
   overflow: hidden;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
-  border-radius: 12px;
   color: var(--text-primary);
-  font-size: 1.5rem;
   font-weight: 600;
   line-height: 1;
   cursor: pointer;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+}
+
+.date-nav-step {
+  flex: 0 0 36px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  font-size: 1.25rem;
 }
 
 .date-nav-btn:active:not(:disabled) {
@@ -1574,28 +1660,130 @@ body {
 }
 
 .date-nav-current {
-  font-size: 0.875rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 44px;
+  border-radius: 12px;
 }
 
 .date-nav-label {
-  font-size: 0.875rem;
+  font-size: 1rem;
   font-weight: 600;
   white-space: nowrap;
-  pointer-events: none;
 }
 
-.date-nav-input {
-  position: absolute;
+.calendar-overlay {
+  position: fixed;
   inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 5.5rem 0.75rem 1rem;
+}
+
+.calendar {
   width: 100%;
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  opacity: 0;
-  cursor: pointer;
+  max-width: 360px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 0.75rem;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.calendar-title {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.calendar-month-btn {
+  width: 36px;
+  height: 36px;
   border: none;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 1.25rem;
+  cursor: pointer;
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.25rem;
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.15rem;
+}
+
+.calendar-day {
+  position: relative;
+  height: 40px;
+  border: 1px solid transparent;
+  border-radius: 10px;
   background: transparent;
-  color-scheme: dark;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.calendar-day.is-outside {
+  color: var(--text-secondary);
+  opacity: 0.55;
+}
+
+.calendar-day.is-today {
+  border-color: var(--accent);
+}
+
+.calendar-day.is-selected {
+  background: var(--accent);
+  color: #fff;
+}
+
+.calendar-day.is-selected.is-today {
+  border-color: #fff;
+}
+
+.calendar-day.is-future,
+.calendar-day:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.calendar-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--success);
+  margin-top: 2px;
+}
+
+.calendar-day.is-selected .calendar-dot {
+  background: #fff;
 }
 
 .workouts-list {
@@ -1655,10 +1843,16 @@ body {
   width: 100%;
 }
 
-.header-actions {
+.workout-header .header-actions {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.375rem;
   align-items: center;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.workout-header .header-actions:empty {
+  display: none;
 }
 
 .workout-nr {
@@ -1702,15 +1896,27 @@ body {
   flex: 1;
 }
 
-.workout-metric {
+.title-line-end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.375rem;
   flex-shrink: 0;
+  min-width: 0;
+}
+
+.workout-metric {
+  flex: 0 0 5.5em;
+  width: 5.5em;
+  min-width: 5.5em;
   white-space: nowrap;
   margin-left: 0;
   background: none;
   border: none;
   color: inherit;
   font-family: inherit;
-  padding: 0 0 0 0.125rem;
+  padding: 0;
   min-height: 44px;
   display: inline-flex;
   align-items: center;
@@ -1723,7 +1929,6 @@ body {
 .workout-sets-reps {
   flex-shrink: 0;
   white-space: nowrap;
-  margin-left: auto;
   font-size: 0.9375rem;
   font-weight: 500;
   line-height: 1.3;
