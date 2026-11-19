@@ -1,4 +1,4 @@
-import { db as defaultDb, onLocalChange as defaultOnLocalChange } from '../db/index.js'
+import { db as defaultDb, onLocalChange as defaultOnLocalChange, toStorable } from '../db/index.js'
 import {
   KINDS,
   ENABLED_EQUIPMENT_DOC,
@@ -72,7 +72,9 @@ export async function buildRemoteDoc(db, meta) {
   return null
 }
 
-async function writeLocal(db, kind, id, data) {
+async function writeLocal(db, kind, id, remoteData) {
+  // Firestore data may carry class instances (Timestamp); store plain JSON only
+  const data = toStorable(remoteData) || {}
   if (kind === 'days') {
     if (data.deleted) await db.sessions.delete(id)
     else await db.sessions.put(dayFromRemote(id, data))

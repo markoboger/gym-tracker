@@ -12,6 +12,17 @@ import Dexie from 'dexie'
 
 export const db = new Dexie('HappyFitDB')
 
+/**
+ * Plain, structured-clone-safe copy of app data before it goes into IndexedDB.
+ * The UI hands in Vue reactive proxies (e.g. sessions.value[i], workouts.value.filter(...)),
+ * and IndexedDB's structured clone rejects Proxy objects with
+ * "DataCloneError: The object can not be cloned." (WebKit) / "#<Object> could not be cloned." (V8).
+ * A JSON round trip also drops functions/undefined; app data is plain JSON anyway.
+ */
+export function toStorable(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value))
+}
+
 db.version(1).stores({
   sessions: 'date',
   machineSettings: 'equipmentId',
@@ -79,7 +90,7 @@ export async function migrateFromLocalStorage() {
     if (sessionsJSON) {
       const sessions = JSON.parse(sessionsJSON)
       if (Array.isArray(sessions)) {
-        await db.sessions.bulkPut(sessions)
+        await db.sessions.bulkPut(toStorable(sessions))
         console.log(`[HappyFit] Migrated ${sessions.length} sessions`)
       }
     }
@@ -132,8 +143,9 @@ export const storage = {
 
   async putSession(session) {
     await db.transaction('rw', db.sessions, db.syncMeta, async () => {
-      await db.sessions.put(session)
-      await touchSyncMeta('days', session.date)
+      const record = toStorable(session)
+      await db.sessions.put(record)
+      await touchSyncMeta('days', record.date)
     })
     notifyLocalChange()
   },
@@ -167,7 +179,7 @@ export const storage = {
 
   async putMachineSetting(equipmentId, settings) {
     await db.transaction('rw', db.machineSettings, db.syncMeta, async () => {
-      await db.machineSettings.put({ equipmentId, ...settings })
+      await db.machineSettings.put({ ...toStorable(settings), equipmentId })
       await touchSyncMeta('machines', equipmentId)
     })
     notifyLocalChange()
@@ -181,7 +193,7 @@ export const storage = {
   async setEnabledEquipment(equipmentIds) {
     await db.transaction('rw', db.enabledEquipment, db.syncMeta, async () => {
       await db.enabledEquipment.clear()
-      const records = equipmentIds.map(equipmentId => ({ equipmentId }))
+      const records = toStorable(Array.from(equipmentIds)).map(equipmentId => ({ equipmentId }))
       await db.enabledEquipment.bulkAdd(records)
       await touchSyncMeta('config', 'enabledEquipment')
     })

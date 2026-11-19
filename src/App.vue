@@ -732,6 +732,17 @@ function exportData() {
   URL.revokeObjectURL(url)
 }
 
+// Accepts a HappyFit export (array of sessions) or { sessions: [...] }
+async function applyImportedSessions(imported) {
+  const list = Array.isArray(imported) ? imported : imported?.sessions
+  if (!Array.isArray(list)) throw new Error('Ungültiges Datenformat (erwartet: Liste von Trainingstagen)')
+  const valid = list.filter(session => session && typeof session.date === 'string' && Array.isArray(session.workouts))
+  sessions.value = valid
+  await saveSessions()
+  initWorkouts()
+  return valid.length
+}
+
 async function importData() {
   const input = document.createElement('input')
   input.type = 'file'
@@ -741,13 +752,8 @@ async function importData() {
     const reader = new FileReader()
     reader.onload = async (event) => {
       try {
-        const imported = JSON.parse(event.target.result)
-        if (Array.isArray(imported)) {
-          sessions.value = imported
-          await saveSessions()
-          await initWorkouts()
-          alert('Import erfolgreich!')
-        }
+        const count = await applyImportedSessions(JSON.parse(event.target.result))
+        alert(`Import erfolgreich! (${count} Tage)`)
       } catch (err) {
         alert('Import fehlgeschlagen: ' + err.message)
       }
