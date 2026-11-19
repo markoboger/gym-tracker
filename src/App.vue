@@ -18,7 +18,9 @@ import {
   setProgressColors,
   kgCounterColor,
   countTargetHitDays,
-  TARGET_SET_OPTIONS
+  TARGET_SET_OPTIONS,
+  COLORS,
+  badgeTextForBackground
 } from './set-progress.js'
 import {
   todayIso,
@@ -572,6 +574,18 @@ function nrBadgeStyle(workout) {
   }
 }
 
+function metricBadgeStyle(workout) {
+  const fill = weightColor(workout) || COLORS.neutralBadge
+  return {
+    background: fill,
+    color: weightColor(workout) ? badgeTextForBackground(fill) : COLORS.badgeTextNeutral
+  }
+}
+
+function metricIsCompact(workout) {
+  return String(primaryValue(workout)).length > 3
+}
+
 function weightColor(workout) {
   if (workoutUnit(workout) === 'min') return null
   const settings = getMachineSettings(workout.equipmentId)
@@ -913,9 +927,20 @@ onMounted(async () => {
             <label class="date-label">
               {{ editingSession ? 'Training bearbeiten' : 'Training' }}
             </label>
-            <button v-if="!editingSession" @click="createNewDay" class="btn-new-day">
-              + Neuer Tag
-            </button>
+            <div class="date-header-actions">
+              <button
+                v-if="!editingSession"
+                type="button"
+                class="btn-new-day"
+                data-test="date-today"
+                aria-label="Heute"
+                :disabled="isViewingToday"
+                @click="goToToday"
+              >Heute</button>
+              <button v-if="!editingSession" type="button" @click="createNewDay" class="btn-new-day">
+                + Neuer Tag
+              </button>
+            </div>
           </div>
           <div class="date-nav" role="group" aria-label="Tag wählen">
             <button
@@ -943,14 +968,6 @@ onMounted(async () => {
               :disabled="!canGoNext"
               @click="shiftDay(1)"
             >+</button>
-            <button
-              type="button"
-              class="date-nav-btn date-nav-today"
-              data-test="date-today"
-              aria-label="Heute"
-              :disabled="isViewingToday"
-              @click="goToToday"
-            >Heute</button>
           </div>
           <div v-if="showCalendar" class="calendar-overlay" data-test="calendar-overlay" @click="closeCalendar">
             <div class="calendar" data-test="training-calendar" @click.stop>
@@ -1012,29 +1029,30 @@ onMounted(async () => {
                     @pointercancel.stop="cancelNrPress"
                     @contextmenu.prevent.stop
                   >{{ workout.nr || '•' }}</button>
-                  <span class="workout-name workout-title-size">{{ workout.name }}</span>
-                  <div class="title-line-end">
-                    <span
-                      v-if="showSollReps(workout)"
-                      class="workout-sets-reps"
-                    >{{ targetSetsFor(workout) }}×{{ workout.reps }}</span>
-                    <button
-                      v-if="showWorkoutMetric(workout)"
-                      type="button"
-                      class="workout-metric workout-title-size"
-                      :style="{ color: weightColor(workout) || undefined, textAlign: 'right' }"
-                      @click.stop="openPicker(workout, primaryField(workout))"
-                    >
-                      {{ primaryValue(workout) }} {{ primaryLabel(workout) }}
-                    </button>
-                  </div>
+                  <span class="workout-name-slot">
+                    <span class="workout-name workout-title-size">{{ workout.name }}</span>
+                  </span>
+                  <span
+                    v-if="showSollReps(workout)"
+                    class="workout-sets-reps"
+                  >{{ targetSetsFor(workout) }}×{{ workout.reps }}</span>
+                  <button
+                    v-if="showWorkoutMetric(workout)"
+                    type="button"
+                    class="workout-metric workout-title-size"
+                    :class="{ 'is-compact': metricIsCompact(workout) }"
+                    :style="metricBadgeStyle(workout)"
+                    @click.stop="openPicker(workout, primaryField(workout))"
+                  >
+                    <span class="metric-number">{{ primaryValue(workout) }}</span>
+                    <span v-if="primaryLabel(workout) === 'min'" class="metric-unit">min</span>
+                  </button>
                 </div>
               </div>
-              <div class="header-actions">
+              <div v-if="!workout.collapsed" class="header-actions">
                 <button 
                   @click.stop="openMachineSettings(workout)"
                   class="btn-settings"
-                  v-if="!workout.collapsed"
                   title="Einstellungen"
                 >
                   ⚙️
@@ -1042,14 +1060,13 @@ onMounted(async () => {
                 <button 
                   @click.stop="quickLog(workout)"
                   class="btn-quick"
-                  v-if="!workout.collapsed"
                 >
                   ✓
                 </button>
                 <button 
                   @click.stop="toggleComplete(workout)"
                   class="btn-undo"
-                  v-if="workout.completed && !workout.collapsed"
+                  v-if="workout.completed"
                   title="Rückgängig"
                 >
                   ↶
@@ -1608,6 +1625,14 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.5rem;
+  gap: 0.5rem;
+}
+
+.date-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
 }
 
 .date-label {
@@ -1629,9 +1654,14 @@ body {
   white-space: nowrap;
 }
 
-.btn-new-day:active {
+.btn-new-day:active:not(:disabled) {
   transform: scale(0.95);
   opacity: 0.8;
+}
+
+.btn-new-day:disabled {
+  opacity: 0.38;
+  cursor: default;
 }
 
 .date-nav {
@@ -1687,15 +1717,6 @@ body {
   white-space: nowrap;
 }
 
-.date-nav-today {
-  flex: 0 0 auto;
-  height: 36px;
-  min-width: 36px;
-  padding: 0 0.7rem;
-  border-radius: 8px;
-  font-size: 0.875rem;
-  white-space: nowrap;
-}
 
 .calendar-overlay {
   position: fixed;
@@ -1815,6 +1836,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
+  width: 100%;
+  min-width: 0;
 }
 
 .workout-card {
@@ -1823,6 +1846,10 @@ body {
   padding: 0.75rem;
   border: 2px solid transparent;
   transition: all 0.2s;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .workout-card.collapsed {
@@ -1830,6 +1857,9 @@ body {
   min-height: 48px;
   display: flex;
   align-items: center;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .workout-card.collapsed:active {
@@ -1838,10 +1868,12 @@ body {
 
 .workout-header {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.75rem;
   min-width: 0;
+  width: 100%;
 }
 
 .workout-header.clickable {
@@ -1854,7 +1886,7 @@ body {
 }
 
 .workout-title {
-  flex: 1;
+  flex: 1 1 100%;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1862,22 +1894,22 @@ body {
 
 .title-line {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0.5rem;
   min-width: 0;
   width: 100%;
+  max-width: 100%;
 }
 
 .workout-header .header-actions {
   display: flex;
   gap: 0.375rem;
   align-items: center;
+  justify-content: flex-end;
+  flex: 1 1 100%;
   min-width: 0;
-  flex-shrink: 0;
-}
-
-.workout-header .header-actions:empty {
-  display: none;
+  margin-top: 0.375rem;
 }
 
 .workout-nr {
@@ -1913,9 +1945,13 @@ body {
   line-height: 1.3;
 }
 
-.workout-name {
-  flex: 1 1 auto;
+.workout-name-slot {
+  flex: 1 1 0%;
   min-width: 0;
+  overflow: hidden;
+}
+
+.workout-name {
   white-space: normal;
   overflow: hidden;
   overflow-wrap: break-word;
@@ -1925,47 +1961,60 @@ body {
   line-clamp: 2;
 }
 
-.title-line-end {
-  margin-left: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 0;
-  flex-shrink: 0;
-  width: 5.5em;
-  min-width: 5.5em;
-}
-
-.workout-metric {
-  flex: 0 0 auto;
-  width: 100%;
-  min-width: 0;
-  white-space: nowrap;
-  margin-left: 0;
-  background: none;
-  border: none;
-  color: inherit;
-  font-family: inherit;
-  padding: 0;
-  min-height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  text-align: right;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
 .workout-sets-reps {
   flex-shrink: 0;
-  width: 100%;
   white-space: nowrap;
   font-size: 0.75rem;
   font-weight: 500;
-  line-height: 1.15;
+  line-height: 1.2;
   color: var(--text-secondary);
   text-align: right;
+}
+
+.workout-metric {
+  box-sizing: border-box;
+  width: 52px;
+  min-width: 52px;
+  max-width: 52px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0 2px;
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  font-family: inherit;
+  flex-shrink: 0;
+  line-height: 1;
+  overflow: hidden;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.workout-metric.is-compact {
+  font-size: 0.85rem;
+}
+
+.metric-number {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-align: center;
+}
+
+.metric-unit {
+  font-size: 0.5625rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  opacity: 0.9;
 }
 
 .workout-controls {

@@ -48,7 +48,7 @@ export default defineConfig(({ command }) => ({
         ]
       },
       workbox: {
-        cacheId: 'happyfit-v16',
+        cacheId: 'happyfit-v17',
         globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
         runtimeCaching: [
           {
